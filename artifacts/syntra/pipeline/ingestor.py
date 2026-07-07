@@ -79,37 +79,46 @@ class Ingestor:
 
     def _parse_pdf_ade(self, file_bytes: bytes, doc_id: str, api_key: str) -> Document | None:
         try:
-            import tempfile
-            from agentic_doc.parse import parse_document  # type: ignore
+            # agentic-doc reads VISION_AGENT_API_KEY from env
+            os.environ.setdefault("VISION_AGENT_API_KEY", api_key)
 
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp.write(file_bytes)
-                tmp_path = tmp.name
-            try:
-                result = parse_document(tmp_path)
-                elements: list[Element] = []
-                text_parts: list[str] = []
-                offset = 0
-                for chunk in result.chunks:
+            from agentic_doc.parse import parse  # type: ignore
+
+            # parse() accepts raw bytes directly → returns List[ParsedDocument]
+            results = parse(file_bytes)
+            if not results:
+                return None
+
+            elements: list[Element] = []
+            text_parts: list[str] = []
+            offset = 0
+
+            for parsed_doc in results:
+                for chunk in (parsed_doc.chunks or []):
                     text = (chunk.text or "").strip()
                     if not text:
                         continue
+                    # chunk_type values: "text", "table", "heading", "figure", etc.
+                    chunk_type = getattr(chunk, "chunk_type", "") or ""
+                    kind = "heading" if "heading" in chunk_type.lower() or "title" in chunk_type.lower() else "paragraph"
                     elements.append(Element(
-                        kind="paragraph", text=text,
+                        kind=kind, text=text,
                         start=offset, end=offset + len(text),
                     ))
                     text_parts.append(text)
                     offset += len(text) + 1
-                return Document(
-                    doc_id=doc_id, source_type="pdf",
-                    full_text="\n".join(text_parts), elements=elements,
-                )
-            finally:
-                os.unlink(tmp_path)
+
+            if not elements:
+                return None
+
+            return Document(
+                doc_id=doc_id, source_type="pdf",
+                full_text="\n".join(text_parts), elements=elements,
+            )
         except ImportError:
             return None
         except Exception as exc:
-            print(f"[ingestor] ADE error: {exc}")
+            print(f"[ingestor] LandingAI ADE error: {exc}")
             return None
 
     def _parse_pdf_plumber(self, file_bytes: bytes, doc_id: str) -> Document:
