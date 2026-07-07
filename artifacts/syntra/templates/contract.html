@@ -28,7 +28,7 @@
 {# ── review routing banner ── #}
 {% if queue_item and queue_item.status == 'pending' %}
 <div class="alert alert-warning d-flex justify-content-between align-items-center py-2 mb-3">
-  <span><i class="bi bi-person-exclamation me-1"></i><strong>Escalated to attorney review</strong> — high-risk findings require sign-off before this contract can proceed.</span>
+  <span><i class="bi bi-person-exclamation me-1"></i><strong>Escalated to attorney review</strong> — {{ queue_item.reason or 'findings' }} — attorney sign-off required before this contract can proceed.</span>
   <a href="/queue" class="btn btn-sm btn-outline-dark text-nowrap ms-3">View queue →</a>
 </div>
 {% elif queue_item and queue_item.status == 'approved' %}
@@ -57,10 +57,17 @@
     <i class="bi bi-shield-exclamation me-1"></i>Plain-Language Risk Summary
   </div>
   <div class="card-body">
-    {% if not issues and not silences %}
+    {% if not issues and not silences and not abstains %}
     <p class="text-success mb-0">
       <i class="bi bi-check-circle-fill me-1"></i>
       No material issues found — contract appears to comply with playbook positions.
+    </p>
+    {% elif not issues and not silences %}
+    <p class="mb-0">
+      <i class="bi bi-question-circle-fill me-1 text-warning"></i>
+      No breaches found in the clauses that could be assessed, but
+      <strong>{{ abstains | length }} clause{{ 's' if abstains | length != 1 }}</strong>
+      had no matching playbook position and couldn't be evaluated.
     </p>
     {% else %}
       {% if silences %}

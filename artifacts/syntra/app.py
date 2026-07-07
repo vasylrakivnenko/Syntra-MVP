@@ -131,9 +131,13 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
         db.execute("DELETE FROM queue_items WHERE doc_id=? AND status='pending'", (doc_id,))
         for qi in queue_items:
             db.execute(
-                "INSERT OR REPLACE INTO queue_items VALUES (?,?,?,?,?,?,?)",
+                """INSERT OR REPLACE INTO queue_items
+                   (item_id, doc_id, priority, assignee, status, reason,
+                    created_at, attorney_notes)
+                   VALUES (?,?,?,?,?,?,?,?)""",
                 (qi.item_id, qi.doc_id, qi.priority, qi.assignee,
-                 qi.status, datetime.datetime.utcnow().isoformat(), None),
+                 qi.status, qi.reason,
+                 datetime.datetime.utcnow().isoformat(), None),
             )
         db.execute(
             "UPDATE documents SET status='processed', side=?, service_line=? WHERE doc_id=?",

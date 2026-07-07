@@ -16,6 +16,9 @@
         &nbsp;·&nbsp;Side: {{ side_display(item.service_line, item.side) }}
         &nbsp;·&nbsp;Priority score: <strong>{{ item.priority }}</strong>
       </small>
+      {% if item.reason %}
+      <div><small class="text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>{{ item.reason }}</small></div>
+      {% endif %}
     </div>
     <div class="d-flex gap-2">
       <a href="/contracts/{{ item.doc_id }}" class="btn btn-outline-secondary btn-sm">View analysis</a>

@@ -74,6 +74,7 @@ def init_db():
             priority      INTEGER,
             assignee      TEXT,
             status        TEXT,
+            reason        TEXT,
             created_at    TEXT,
             attorney_notes TEXT
         );

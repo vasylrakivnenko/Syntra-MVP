@@ -119,6 +119,7 @@ class QueueItem(BaseModel):
     priority: int = 0
     assignee: Optional[str] = None
     status: str = "pending"      # pending | approved | rejected
+    reason: Optional[str] = None  # human-readable escalation reason
 
 
 class Citation(BaseModel):

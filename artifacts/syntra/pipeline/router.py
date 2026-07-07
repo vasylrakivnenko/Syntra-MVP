@@ -27,4 +27,23 @@ class Router:
             + len(deviations) * 1
             + len(abstains)
         )
-        return [QueueItem(doc_id=doc_id, priority=priority, status="pending")]
+        reason = build_escalation_reason(
+            len(unacceptable), len(silences), len(abstains)
+        )
+        return [QueueItem(doc_id=doc_id, priority=priority, status="pending",
+                          reason=reason)]
+
+
+def build_escalation_reason(n_unacceptable: int, n_silences: int,
+                            n_abstains: int) -> str:
+    """Human-readable explanation of why a contract was escalated."""
+    parts: list[str] = []
+    if n_unacceptable:
+        parts.append(f"{n_unacceptable} clause{'s' if n_unacceptable != 1 else ''} "
+                     f"breach{'es' if n_unacceptable == 1 else ''} walk-away positions")
+    if n_silences:
+        parts.append(f"{n_silences} required clause{'s are' if n_silences != 1 else ' is'} missing")
+    if n_abstains >= _ABSTAIN_ESCALATION_THRESHOLD:
+        parts.append(f"{n_abstains} clause{'s' if n_abstains != 1 else ''} "
+                     f"couldn't be assessed against the playbook")
+    return "; ".join(parts)
