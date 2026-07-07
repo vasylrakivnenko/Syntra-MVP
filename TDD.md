@@ -1,6 +1,6 @@
-# Syntra — Technical Design Document (v0.2)
+# Syntra — Technical Design Document (v0.3)
 
-**Scope:** Prototype for playbook-grounded contract triage. Covers ingestion (DOCX/PDF/email), **playbook bootstrapping from a company's existing contracts**, retrieval over company knowledge, clause extraction & comparison, explainable redline generation, the attorney review queue, and the audit-trail schema.
+**Scope:** Prototype for playbook-grounded contract triage. Covers ingestion (DOCX/PDF), **playbook bootstrapping from a company's existing contracts**, retrieval over company knowledge, clause extraction & comparison, explainable redline generation, the attorney review queue, and the audit-trail schema. Email ingestion and advanced ML calibration are explicitly scoped to later versions — see §16 Roadmap.
 
 **Design tenets (non-negotiable):**
 1. **Clear architecture, minimal code.** Every stage is a small, single-responsibility class with typed inputs and outputs. We buy the hard parts (OCR, layout, embeddings, retrieval, Word I/O) off the shelf and write only the glue and the legal logic.
@@ -27,7 +27,7 @@ Two flows share the same spine (`ingest → chunk → classify`):
                     └───────────────────────┬────────────────────────┘
                                             │ (lane two only)
  upload ─► INGEST ─► CHUNK ─► CLASSIFY ─► BRANCH ─► ROUTE ─► REDLINE ─► AUDIT
- (docx/pdf/email)  (structural)(1 LLM call)  │      (queue)  (.docx)  (append-only)
+ (docx/pdf)        (structural)(1 LLM call)  │      (queue)  (.docx)  (append-only)
                                              ├─ Verdict  → auto-clear + redline
                                              ├─ Silence  → attorney (missing clause)
                                              └─ Abstain  → attorney (insufficient grounding)
@@ -47,7 +47,7 @@ We write glue and legal logic; everything hard is delegated.
 | Architecture-quality supervision | **Sentrux** | Structural/fitness checks over module boundaries — keeps the layering honest as code grows. |
 | PDF/scanned OCR + layout + offsets | **LandingAI ADE** (`ade-python`) | Agentic extraction with source grounding; no reinventing OCR. |
 | Native DOCX read + tracked-changes write | **python-docx** | Real Word artifact, not a web diff. |
-| Email intake | **mailparse / IMAP poll** | Pulls attachments into the same ingest path. |
+| Email intake *(v2)* | **mailparse / IMAP poll** | Pure mechanics — pulls attachments into the same ingest path; no new architecture needed. |
 | Retrieval over company knowledge | **ContextHub** (`github.com/andrewyng/context-hub`) | Drop-in hybrid retrieval over our corpus; used only by lane two. |
 | Agentic lane-two + ask-AI editing | **smolagents** | Minimal, code-first agent loop. Escalate to **CrewAI** only if multi-role orchestration is ever needed (not in prototype). |
 | Classification / rationale / inference | Structured-output LLM (temp 0) | Zero-shot via playbook-as-knowledge; no fine-tune, so citations stay auditable. |
@@ -130,15 +130,14 @@ class ClauseVerdict(BaseModel):
 
 ---
 
-## 3. Ingestion (DOCX / PDF / email)
+## 3. Ingestion (DOCX / PDF)
 
 Normalize any source into one `Document`; **character offsets are load-bearing** — every citation anchors to `(start, end)`.
 
 - **PDF** (incl. scanned): LandingAI ADE → structured elements with grounding → flatten to `Element[]`.
 - **DOCX**: python-docx walks paragraphs/tables; offsets are exact and we keep the original for tracked-changes export.
-- **Email**: poll a mailbox, extract attachments, route each to the PDF/DOCX adapter; body → metadata, never a clause.
 
-**Prototype decision:** DOCX + PDF upload is the live path; email is a thin adapter reusing the identical path (code-complete, demoed optionally). One `Document` model, three tiny adapters (~30–50 lines each).
+**V1 scope:** DOCX + PDF upload only. One `Document` model, two tiny adapters (~30–50 lines each). Email is pure mechanics — it just polls a mailbox and hands each attachment to the same two adapters — so it ships in v2 with no architectural change.
 
 *Same ingest path serves both flows — bulk historical contracts (onboarding) and single inbound contracts (runtime).*
 
@@ -326,6 +325,23 @@ class AuditEvent(BaseModel):
 ## 15. v2 flywheel
 
 Every attorney decision is a labeled example. Once enough accumulate in the audit trail, a small tabular calibrator (TabPFN-class) learns the *human-needed vs. auto-clear* boundary, tightening routing over time — while the deterministic playbook spine and full citation chain remain the source of truth. No fine-tuned black box ever sits between a clause and its verdict.
+
+---
+
+## 16. Roadmap
+
+Decisions about what is *not* in the prototype are as deliberate as what is. The table below states the version, the feature, and the reason it is not v1 — so the panel can probe the reasoning, not just the exclusion.
+
+| Version | Feature | Why deferred |
+|---|---|---|
+| **v1 (prototype)** | DOCX + PDF upload, playbook bootstrap, three-way branch, deterministic redline, attorney queue, audit trail | The core loop — everything needed to prove the thesis. |
+| **v2** | **Email intake** | Pure mechanics: poll a mailbox, extract attachments, hand to the existing PDF/DOCX adapters. No new architecture. Deferred to keep the prototype focused, not because it is hard. |
+| **v2** | Lane-two semantic safety net (ContextHub + smolagents, fully live) | Scaffolded in v1; the spine must ship and be validated first. Lane two is meaningless without a calibrated baseline from the deterministic path. |
+| **v2** | Attorney feedback → automatic playbook rule promotion | The flywheel depends on enough attorney decisions to be statistically meaningful; the UI and data schema are designed for it in v1, but the auto-promotion logic ships once real data flows. |
+| **v2** | Procurement / employment specialization (expanded clause taxonomy) | Wedge is NDA + vendor contracts; expansion taxonomy is a data exercise on top of the same pipeline. |
+| **v3** | **TabPFN routing calibrator** | Tabular foundation model needs labeled rows at inference — those rows only exist after the attorney loop has run long enough to produce them. Named v3 so the architecture reserves the right slot (audit trail already captures the training signal). |
+| **v3** | Perplexity-based novelty detector | Useful as an *attorney-routing signal* ("this clause is unusually drafted") once the primary path is battle-tested and the false-positive rate of novelty alerts can be measured. |
+| **v3** | Fine-tuned legal classifier | No labeled data moat yet; the attorney flywheel in v2 generates it. Revisit when the corpus is large enough that a fine-tune would beat the zero-shot playbook prompt. |
 
 ---
 
