@@ -2,7 +2,23 @@
 from __future__ import annotations
 import io
 import os
+import re
 from models import Document, Element
+
+# Patterns for detecting the start of a new legal section / paragraph break
+_NUMBERED_SECTION = re.compile(
+    r"^\s*"
+    r"(?:"
+    r"\d{1,2}(?:\.\d{1,2})*\."   # 1.  /  1.1.  /  2.3.
+    r"|[A-Z]{1,5}\."              # A.  /  XIV.
+    r"|\([a-z]\)"                  # (a)
+    r"|\([ivx]+\)"                 # (iv)
+    r")"
+    r"\s+[A-Z(\"']",              # followed by capital / open-paren / quote
+    re.VERBOSE,
+)
+
+_ALL_CAPS_HEADING = re.compile(r"^[A-Z][A-Z\s\-,./':&]{5,}$")
 
 
 class Ingestor:
@@ -97,29 +113,83 @@ class Ingestor:
             return None
 
     def _parse_pdf_plumber(self, file_bytes: bytes, doc_id: str) -> Document:
-        try:
-            import pdfplumber  # type: ignore
+        """
+        Extract text from PDF and join wrapped lines into logical paragraphs.
 
-            elements: list[Element] = []
-            text_parts: list[str] = []
-            offset = 0
+        A new paragraph starts when:
+          - A blank line appears
+          - A numbered section starts  (e.g. "3. Remedies.")
+          - An all-caps heading appears
+          - Indentation changes sharply (heuristic: line shorter than 40 chars
+            followed by a non-indented full line suggests a section break)
+        """
+        try:
+            import pdfplumber
+
+            all_lines: list[str] = []
             with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
                 for page in pdf.pages:
                     raw = page.extract_text() or ""
-                    for line in raw.split("\n"):
-                        line = line.strip()
-                        if len(line) < 3:
-                            continue
-                        elements.append(Element(
-                            kind="paragraph", text=line,
-                            start=offset, end=offset + len(line),
-                        ))
-                        text_parts.append(line)
-                        offset += len(line) + 1
+                    all_lines.extend(raw.split("\n"))
+
         except ImportError:
             placeholder = "[PDF — install pdfplumber or set LANDING_AI_API_KEY]"
-            elements = [Element(kind="paragraph", text=placeholder, start=0, end=len(placeholder))]
-            text_parts = [placeholder]
+            return Document(
+                doc_id=doc_id, source_type="pdf",
+                full_text=placeholder,
+                elements=[Element(kind="paragraph", text=placeholder,
+                                  start=0, end=len(placeholder))],
+            )
+
+        # ── Join lines into logical paragraphs ───────────────────────────────
+        paragraphs: list[tuple[str, str]] = []  # (kind, text)
+        current_lines: list[str] = []
+
+        def flush(kind: str = "paragraph"):
+            if current_lines:
+                joined = " ".join(current_lines).strip()
+                if len(joined) >= 5:
+                    paragraphs.append((kind, joined))
+                current_lines.clear()
+
+        for raw_line in all_lines:
+            stripped = raw_line.strip()
+
+            # Blank line → paragraph break
+            if not stripped:
+                flush()
+                continue
+
+            # All-caps heading
+            if _ALL_CAPS_HEADING.match(stripped):
+                flush()
+                current_lines.append(stripped)
+                flush("heading")
+                continue
+
+            # Numbered section start → new paragraph
+            if _NUMBERED_SECTION.match(stripped):
+                flush()
+                current_lines.append(stripped)
+                continue
+
+            # Continuation of current paragraph
+            current_lines.append(stripped)
+
+        flush()
+
+        # ── Build Document ────────────────────────────────────────────────────
+        elements: list[Element] = []
+        text_parts: list[str] = []
+        offset = 0
+
+        for kind, text in paragraphs:
+            elements.append(Element(
+                kind=kind, text=text,
+                start=offset, end=offset + len(text),
+            ))
+            text_parts.append(text)
+            offset += len(text) + 1
 
         return Document(
             doc_id=doc_id, source_type="pdf",
