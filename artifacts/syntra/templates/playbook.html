@@ -47,9 +47,20 @@
   <tr>
     <td class="fw-semibold">{{ sl.label }}</td>
     <td>
+      {% set persp = nda_perspective(sl.id) %}
+      {% if persp %}
+      <div class="d-flex flex-column gap-1">
+        <span class="badge rounded-pill bg-dark">{{ persp }}</span>
+        {% for p in NDA_PERSPECTIVES if p != persp %}
+        <span class="badge rounded-pill bg-light text-muted border" style="cursor: default;"
+              title="Not configured yet">{{ p }}</span>
+        {% endfor %}
+      </div>
+      {% else %}
       <span class="badge rounded-pill bg-{{ 'primary' if sl.side == 'supplier' else 'success' }}">
         {{ sl.side }}
       </span>
+      {% endif %}
     </td>
     {% for policy in playbook.policies %}
     {% set cell = sl.positions.get(policy.id) %}

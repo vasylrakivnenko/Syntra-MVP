@@ -52,8 +52,9 @@
       <td class="fw-semibold">{{ d.filename }}</td>
       <td>{{ (d.service_line or '—').replace('_',' ') | title }}</td>
       <td>
-        <span class="badge rounded-pill bg-{{ 'primary' if d.side == 'supplier' else 'success' }}">
-          {{ d.side or '—' }}
+        {% set sd = side_display(d.service_line, d.side) %}
+        <span class="badge rounded-pill bg-{{ 'info text-dark' if sd == 'mutual' else 'primary' if sd == 'supplier' else 'success' }}">
+          {{ sd }}
         </span>
       </td>
       <td>

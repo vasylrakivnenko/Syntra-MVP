@@ -155,6 +155,24 @@ def _run_pipeline_bg(doc_id: str, path: Path, source_type: str, filename: str, u
             db.execute("UPDATE documents SET status='error' WHERE doc_id=?", (doc_id,))
 
 
+# NDA rows use NDA-appropriate perspective labels instead of supplier/customer.
+# "nda" covers legacy documents segmented before service lines were playbook-bound.
+_NDA_PERSPECTIVE = {"nda_standalone": "mutual", "nda": "mutual"}
+NDA_PERSPECTIVES = ("mutual", "recipient", "discloser")
+app.add_template_global(NDA_PERSPECTIVES, "NDA_PERSPECTIVES")
+
+
+@app.template_global("side_display")
+def side_display(service_line, side):
+    return _NDA_PERSPECTIVE.get(service_line or "", side or "—")
+
+
+@app.template_global("nda_perspective")
+def nda_perspective(service_line):
+    """Return the active NDA perspective for a service line, or None if not an NDA."""
+    return _NDA_PERSPECTIVE.get(service_line or "")
+
+
 # ── routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
 @login_required

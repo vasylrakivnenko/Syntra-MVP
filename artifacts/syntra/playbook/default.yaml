@@ -158,7 +158,7 @@ service_lines:
         source_doc_ids: []
 
   - id: nda_standalone
-    label: "NDA (standalone)"
+    label: "NDA (mutual)"
     side: supplier
     positions:
       confidentiality:

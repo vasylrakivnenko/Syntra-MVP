@@ -13,7 +13,7 @@
       <h6 class="mb-0 fw-semibold">{{ item.filename }}</h6>
       <small class="text-muted">
         Service: {{ (item.service_line or '—').replace('_',' ') | title }}
-        &nbsp;·&nbsp;Side: {{ item.side or '—' }}
+        &nbsp;·&nbsp;Side: {{ side_display(item.service_line, item.side) }}
         &nbsp;·&nbsp;Priority score: <strong>{{ item.priority }}</strong>
       </small>
     </div>
