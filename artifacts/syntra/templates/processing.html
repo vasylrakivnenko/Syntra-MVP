@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Analysing — {{ doc.filename }} — Syntra{% endblock %}
+{% block content %}
+
+<div class="d-flex flex-column align-items-center justify-content-center py-5">
+  <div class="card p-5 text-center" style="max-width:520px;width:100%;">
+    <div class="mb-4">
+      <div class="spinner-border text-dark" style="width:3rem;height:3rem;" role="status">
+        <span class="visually-hidden">Analysing…</span>
+      </div>
+    </div>
+    <h4 class="fw-bold mb-1">Analysing contract&hellip;</h4>
+    <p class="text-muted mb-4">
+      <strong>{{ doc.filename }}</strong><br>
+      <small>Segmenting &rarr; classifying &rarr; triaging &rarr; redlining each clause.
+      LLM calls may take 30&ndash;90 seconds.</small>
+    </p>
+
+    <div class="progress mb-3" style="height:6px;">
+      <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated bg-dark"
+           role="progressbar" style="width:0%"></div>
+    </div>
+    <p id="status-text" class="text-muted small">Starting pipeline…</p>
+  </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const docId = {{ doc_id | tojson }};
+  const statusUrl = "/contracts/" + docId + "/status";
+  const doneUrl   = "/contracts/" + docId;
+  const uploadUrl = "/upload";
+
+  let elapsed = 0;
+  const TICK = 2000;   // poll every 2 s
+  const MAX_W = 90;    // progress bar caps at 90 % until done
+
+  const bar  = document.getElementById("progress-bar");
+  const text = document.getElementById("status-text");
+
+  const messages = [
+    "Parsing document…",
+    "Detecting service line and contract side…",
+    "Splitting document into clauses…",
+    "Classifying clause types…",
+    "Comparing against playbook positions…",
+    "Generating redlines and suggestions…",
+    "Routing high-risk items to attorney queue…",
+    "Finalising analysis…",
+  ];
+
+  function setProgress(pct, msg) {
+    bar.style.width = Math.min(pct, 97) + "%";
+    if (msg) text.textContent = msg;
+  }
+
+  async function poll() {
+    elapsed += TICK;
+    const approxPct = Math.min((elapsed / 90000) * MAX_W, MAX_W);
+    const msgIdx = Math.min(Math.floor(elapsed / 11000), messages.length - 1);
+    setProgress(approxPct, messages[msgIdx]);
+
+    try {
+      const res  = await fetch(statusUrl);
+      const data = await res.json();
+
+      if (data.status === "done") {
+        setProgress(100, "Done! Redirecting…");
+        window.location.href = doneUrl;
+        return;
+      }
+      if (data.status === "error") {
+        text.textContent = "Pipeline error — redirecting…";
+        window.location.href = uploadUrl;
+        return;
+      }
+    } catch (e) {
+      // network hiccup — keep polling
+    }
+
+    setTimeout(poll, TICK);
+  }
+
+  // Start polling after first tick
+  setTimeout(poll, TICK);
+})();
+</script>
+{% endblock %}

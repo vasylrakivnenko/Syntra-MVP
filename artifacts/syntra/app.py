@@ -1,15 +1,17 @@
-"""Syntra — AI-native general counsel. Flask entry point (~200 lines)."""
+"""Syntra — AI-native general counsel. Flask entry point."""
 import os
 import sys
 import json
 import datetime
 import hashlib
 import atexit
+import threading
+import traceback
 from pathlib import Path
 from functools import wraps
 from flask import (
     Flask, session, redirect, url_for, request,
-    render_template, flash, send_file, abort,
+    render_template, flash, send_file, abort, jsonify,
 )
 
 BASE = Path(__file__).parent
@@ -37,6 +39,10 @@ UPLOADS.mkdir(exist_ok=True)
 init_db()
 seed_from_file()
 atexit.register(dump_to_file)
+
+# ── background job tracker ─────────────────────────────────────────────────────
+# Maps doc_id → {"status": "running"|"done"|"error", "error": str|None}
+_jobs: dict[str, dict] = {}
 
 
 # ── auth helpers ──────────────────────────────────────────────────────────────
@@ -81,8 +87,7 @@ def _process_verdicts(rows):
 
 
 # ── pipeline runner ───────────────────────────────────────────────────────────
-def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str):
-    user = current_user()
+def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user_id: str):
     playbook = load_playbook()
     lane_two = LaneTwoAgent()
 
@@ -113,7 +118,6 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str):
             verdict.service_line, rw, verdict.suggested_text or "",
         ))
 
-    # Generate redline docx using the verdict objects collected above
     redline_bytes = Redliner().redline(doc, v_objects)
     (UPLOADS / f"{doc_id}_redline.docx").write_bytes(redline_bytes)
 
@@ -130,11 +134,23 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str):
                  qi.status, datetime.datetime.utcnow().isoformat(), None),
             )
         db.execute(
-            "INSERT OR REPLACE INTO documents VALUES (?,?,?,?,?,?,?,?)",
-            (doc_id, source_type, "processed", segment.side, segment.service_line,
-             user["user_id"], datetime.datetime.utcnow().isoformat(), filename),
+            "UPDATE documents SET status='processed', side=?, service_line=? WHERE doc_id=?",
+            (segment.side, segment.service_line, doc_id),
         )
-    AuditLog().append_simple(user["user_id"], "pipeline_run", doc_id)
+    AuditLog().append_simple(user_id, "pipeline_run", doc_id)
+
+
+def _run_pipeline_bg(doc_id: str, path: Path, source_type: str, filename: str, user_id: str):
+    """Wrapper that runs _run_pipeline in a thread and updates _jobs."""
+    try:
+        _run_pipeline(doc_id, path, source_type, filename, user_id)
+        _jobs[doc_id] = {"status": "done", "error": None}
+    except Exception:
+        err = traceback.format_exc()
+        print(f"[pipeline] ERROR for {doc_id}:\n{err}")
+        _jobs[doc_id] = {"status": "error", "error": err}
+        with get_db() as db:
+            db.execute("UPDATE documents SET status='error' WHERE doc_id=?", (doc_id,))
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -190,12 +206,47 @@ def upload():
         ).hexdigest()[:12]
         save_path = UPLOADS / f"{doc_id}.{ext}"
         f.save(save_path)
-        try:
-            _run_pipeline(doc_id, save_path, ext if ext == "pdf" else "docx", f.filename)
-            return redirect(url_for("contract", doc_id=doc_id))
-        except Exception as e:
-            flash(f"Processing error: {e}")
+        user = current_user()
+        # Insert the document row immediately so the processing page can find it
+        with get_db() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO documents VALUES (?,?,?,?,?,?,?,?)",
+                (doc_id, ext if ext == "pdf" else "docx", "processing",
+                 None, None, user["user_id"],
+                 datetime.datetime.utcnow().isoformat(), f.filename),
+            )
+        _jobs[doc_id] = {"status": "running", "error": None}
+        t = threading.Thread(
+            target=_run_pipeline_bg,
+            args=(doc_id, save_path, ext if ext == "pdf" else "docx", f.filename, user["user_id"]),
+            daemon=True,
+        )
+        t.start()
+        return redirect(url_for("processing", doc_id=doc_id))
     return render_template("upload.html", user=current_user())
+
+
+@app.route("/contracts/<doc_id>/processing")
+@login_required
+def processing(doc_id):
+    with get_db() as db:
+        doc = db.execute("SELECT * FROM documents WHERE doc_id=?", (doc_id,)).fetchone()
+    if not doc:
+        abort(404)
+    job = _jobs.get(doc_id, {"status": "done", "error": None})
+    if job["status"] == "done":
+        return redirect(url_for("contract", doc_id=doc_id))
+    if job["status"] == "error":
+        flash(f"Pipeline error: {job['error'][:300] if job['error'] else 'Unknown error'}")
+        return redirect(url_for("upload"))
+    return render_template("processing.html", doc=doc, doc_id=doc_id, user=current_user())
+
+
+@app.route("/contracts/<doc_id>/status")
+@login_required
+def job_status(doc_id):
+    job = _jobs.get(doc_id, {"status": "done", "error": None})
+    return jsonify(job)
 
 
 @app.route("/contracts")
