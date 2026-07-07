@@ -1,6 +1,6 @@
-# [Project name]
+# [Syntra]
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Syntra provides SMBs and mid-market companies with high quality legal support and cut legal review costs by 90% and deal cycles by 70% throughout AI-native general counsel product that ingests contracts or legal requests, compares them to company positions, drafts redlines and responses, flags risk, and routes high-risk items to a supervising attorney.
 
 ## Run & Operate
 

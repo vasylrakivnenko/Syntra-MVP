@@ -1,227 +1,334 @@
-# Syntra — Technical Design Document (v0.1)
+# Syntra — Technical Design Document (v0.2)
 
-**Scope:** Prototype for playbook-grounded contract triage. This document covers ingestion, retrieval over company knowledge, clause extraction & comparison, explainable redline generation, the attorney review queue, and the audit-trail schema.
+**Scope:** Prototype for playbook-grounded contract triage. Covers ingestion (DOCX/PDF/email), **playbook bootstrapping from a company's existing contracts**, retrieval over company knowledge, clause extraction & comparison, explainable redline generation, the attorney review queue, and the audit-trail schema.
 
-**Design tenet (non-negotiable):** *Clear architecture, minimal code.* Every stage is a small, pure function with a typed input and a typed output. We buy the hard parts (OCR, layout parsing, embeddings, retrieval) off the shelf and write only the glue and the legal logic ourselves. A reader should be able to trace one clause from bytes to redline in a single sitting.
+**Design tenets (non-negotiable):**
+1. **Clear architecture, minimal code.** Every stage is a small, single-responsibility class with typed inputs and outputs. We buy the hard parts (OCR, layout, embeddings, retrieval, Word I/O) off the shelf and write only the glue and the legal logic.
+2. **Modular and readable.** Named classes with explicit attributes and methods, one concern each. A reviewer can trace one clause from bytes to redline in a single sitting, and swap any stage without touching the others.
+3. **Typed everywhere.** All data models are **Pydantic** models — they *are* the contract between modules, validated at every boundary.
+4. **Supervised architecture.** **Sentrux** runs as the architecture-quality gate over module boundaries, so the structure stays clean as the code grows.
 
 ---
 
 ## 0. Architecture at a glance
 
+Two flows share the same spine (`ingest → chunk → classify`):
+
 ```
-                    ┌──────────── company knowledge (retrieval) ───────────┐
-                    │  playbook.yaml · past contracts · approved fallbacks  │
-                    └───────────────────────┬──────────────────────────────┘
+ A) ONBOARDING — build the playbook the owner never wrote down
+ existing contracts (bulk) ─► INGEST ─► CHUNK ─► CLASSIFY ─► AGGREGATE by type
+                                                          ─► INFER positions
+                                                          ─► Playbook v0.1 (draft)
+                                                          ─► owner edits (manual / ask-AI) ─► save (versioned)
+
+ B) RUNTIME — triage one inbound contract against that playbook
+                    ┌──────── company knowledge (retrieval) ────────┐
+                    │  playbook.yaml · past contracts · fallbacks    │
+                    └───────────────────────┬────────────────────────┘
                                             │ (lane two only)
- upload ──► INGEST ──► CHUNK ──► CLASSIFY ──► BRANCH ──► ROUTE ──► REDLINE ──► AUDIT
- (docx/pdf/email)   (structural) (1 LLM call)  │        (queue)   (.docx)   (append-only)
-                                               ├─ Verdict   → auto-clear + redline
-                                               ├─ Silence   → attorney (missing clause)
-                                               └─ Abstain   → attorney (insufficient grounding)
+ upload ─► INGEST ─► CHUNK ─► CLASSIFY ─► BRANCH ─► ROUTE ─► REDLINE ─► AUDIT
+ (docx/pdf/email)  (structural)(1 LLM call)  │      (queue)  (.docx)  (append-only)
+                                             ├─ Verdict  → auto-clear + redline
+                                             ├─ Silence  → attorney (missing clause)
+                                             └─ Abstain  → attorney (insufficient grounding)
 ```
 
-**The spine is deterministic.** One cheap LLM call classifies each clause; matching a clause to its rules is a dictionary lookup, not similarity math. The only place we do vector retrieval is *lane two*, which runs solely on clauses the spine could not confidently place. This keeps the primary path fully explainable ("§7.2 → Limitation of Liability → rule `LL-1`") and cheap.
+**Why this matters (validated with owners):** SMB owners don't have a written playbook — *their standards live in their heads and in the contracts they've already signed.* So we don't ask them to author one. We **derive playbook v0.1 from their existing contracts**, then let them correct it. The runtime spine stays deterministic; the playbook is just data that flow A produces and flow B consumes.
 
-**Reused building blocks (glue only, written by us):**
+---
 
-| Concern | Reused component | Why |
+## 1. Stack & reused building blocks
+
+We write glue and legal logic; everything hard is delegated.
+
+| Concern | Component | Why |
 |---|---|---|
-| PDF/scanned OCR + layout, character offsets | **LandingAI ADE** (`ade-python`) | Agentic doc extraction returns structured elements with source grounding; we don't reinvent OCR/layout. |
+| Data models & validation | **Pydantic** | One typed contract per module boundary; validation is free. |
+| Architecture-quality supervision | **Sentrux** | Structural/fitness checks over module boundaries — keeps the layering honest as code grows. |
+| PDF/scanned OCR + layout + offsets | **LandingAI ADE** (`ade-python`) | Agentic extraction with source grounding; no reinventing OCR. |
 | Native DOCX read + tracked-changes write | **python-docx** | Real Word artifact, not a web diff. |
-| Email intake | **mailparse / IMAP poll** | Pull attachments, hand them to the same ingest path. |
-| Retrieval over company knowledge | **ContextHub** | Drop-in hybrid retrieval layer over our corpus; used only by lane two. |
-| Agentic lane-two reasoning | **smolagents** | Minimal, code-first agent loop — a few lines, no heavyweight framework. Escalate to **CrewAI** only if we need multi-role orchestration (not in prototype). |
-| Classification / rationale generation | Any structured-output LLM (temp 0) | Zero-shot via playbook-as-knowledge; no fine-tune, so citations stay auditable. |
+| Email intake | **mailparse / IMAP poll** | Pulls attachments into the same ingest path. |
+| Retrieval over company knowledge | **ContextHub** (`github.com/andrewyng/context-hub`) | Drop-in hybrid retrieval over our corpus; used only by lane two. |
+| Agentic lane-two + ask-AI editing | **smolagents** | Minimal, code-first agent loop. Escalate to **CrewAI** only if multi-role orchestration is ever needed (not in prototype). |
+| Classification / rationale / inference | Structured-output LLM (temp 0) | Zero-shot via playbook-as-knowledge; no fine-tune, so citations stay auditable. |
 
----
+**Module map (each is one class, one responsibility):**
 
-## 1. Ingestion (DOCX / PDF / email)
-
-**Goal:** normalize any source into one internal `Document` model whose **character offsets are load-bearing** — every downstream citation anchors to `(start, end)` in the normalized text.
-
-```
-raw bytes ──► adapter ──► Document { docId, sourceType, elements[], fullText }
-                          Element   { id, kind, text, start, end, headingPath[] }
-```
-
-- **PDF** (incl. scanned): LandingAI ADE → structured elements with grounding; we flatten to `Element[]` and compute offsets against `fullText`.
-- **DOCX**: python-docx walks paragraphs/tables; native structure means offsets are exact and we keep the original file for tracked-changes export.
-- **Email**: poll a mailbox, extract attachments, route each to the PDF/DOCX adapter. The email body becomes metadata (sender, received-at) on the `Document`, never a clause.
-
-**Prototype decision (resolves open item ⚠️ §2.1 / §10.6):** ship **DOCX + PDF upload** as the live path; email intake is **built as a thin adapter but demoed optionally** — it reuses the identical ingest path, so it is code-complete without expanding the demo surface.
-
-Each adapter is ~30–50 lines: parse → emit `Element[]` → assign offsets. One shared `Document` model, three tiny adapters.
-
----
-
-## 2. Chunk — structural segmentation
-
-No fixed-size windows. We segment by the document's own structure (article → clause → sub-clause) using the heading hierarchy ADE/python-docx already give us. Sub-clauses **inherit `headingPath`** so a nested paragraph carries its parent context into classification.
-
-```
-Element[] ──► Clause[] { id, text, start, end, headingPath[] }
-```
-
-Output is a flat list of `Clause` objects; `headingPath` preserves hierarchy without a tree. ~20 lines.
-
----
-
-## 3. Classify — the spine decision
-
-Each clause gets **one cheap LLM call**: temperature 0, structured JSON output, confidence score. The label space is the **playbook taxonomy (12–20 wedge types)** — *not* CUAD's 41. CUAD is an eval yardstick only (§6); we keep a static map from our taxonomy → CUAD where they overlap.
-
-```json
-// classify(clause) → structured output
-{ "clauseType": "limitation_of_liability", "confidence": 0.91, "spans": [[412, 690]] }
-```
-
-Matching is then a **deterministic lookup**: `playbook[clauseType] → rules`. No similarity math on the primary path. This is the whole reason the system is explainable.
-
----
-
-## 4. Branch — the three-way product decision
-
-Given a classified clause and its matched rules, exactly one branch fires. This is a pure function over the classification result plus a coverage check against the playbook's required types.
-
-| Branch | Trigger | Output payload |
+| Module | Class | Key methods |
 |---|---|---|
-| **Verdict** | Clause classified, rules matched | `complies` / `acceptable_deviation` / `unacceptable` / `unusual` + cited spans + rule IDs + one-line rationale |
-| **Silence** | A playbook-**required** type has zero classified hits across the doc | "Contract is silent on X; playbook requires X" |
-| **Abstain** | Low confidence, taxonomy no-fit, or lane-one/lane-two disagreement | "Insufficient grounding" + reason → attorney |
+| Ingest | `Ingestor` | `ingest(bytes, source_type) -> Document` |
+| Chunk | `Chunker` | `chunk(doc: Document) -> list[Clause]` |
+| Classify | `Classifier` | `classify(clause: Clause) -> Classification` |
+| Playbook build | `PlaybookBuilder` | `build(contracts: list[Document]) -> Playbook` |
+| Playbook edit | `PlaybookEditor` | `edit_manual(...)`, `edit_with_ai(prompt) -> Playbook`, `save() -> version` |
+| Branch | `Triage` | `decide(clause, classification, playbook) -> ClauseVerdict` |
+| Retrieval | `KnowledgeIndex` | `search(query) -> list[Passage]` (ContextHub-backed) |
+| Redline | `Redliner` | `redline(doc, verdicts) -> DocxRef` |
+| Route | `Router` | `route(verdicts) -> QueueItem` |
+| Audit | `AuditLog` | `append(event: AuditEvent) -> AuditEvent` |
 
-**Abstention is the anti-wrapper proof.** A wrapper always answers; Syntra visibly declines and explains why. It is surfaced prominently in the queue and the demo.
-
-One LLM judgment call per clause with all of that clause's rules bundled (preferred / fallback / walk-away in a single prompt) — never one call per rule pair.
-
-### 4.1 Lane two — semantic safety net (designed; stubbed in prototype)
-
-Only runs on **low-confidence / no-fit** clauses. Uses ContextHub for hybrid **BM25 + embeddings** (exact defined terms matter) over company knowledge, then a legal-domain reranker, driven by a minimal **smolagents** loop. **Lane disagreement is itself a routing signal → abstain.** For 48h scope this lane is code-scaffolded but returns "designed, not evaluated" unless time allows; the spine ships fully.
-
----
-
-## 5. Retrieval over company knowledge
-
-The corpus = `playbook.yaml` + past reviewed contracts + attorney-approved fallbacks. It feeds two consumers:
-
-1. **Deterministic (always):** the playbook lookup in §3 — a loaded dictionary, no retrieval needed.
-2. **Semantic (lane two only):** ContextHub hybrid retrieval to find precedent for clauses the spine couldn't place.
-
-Keeping retrieval *out* of the primary path is a deliberate architecture choice (see §9): at SMB playbook scale, deterministic matching beats vector search and stays citable.
+Stages depend only on Pydantic models, never on each other's internals — that is the seam Sentrux enforces.
 
 ---
 
-## 6. Playbook schema (grounding source)
+## 2. Core data models (Pydantic)
 
-Structured data, **not prose** — YAML, versioned and diffable. Per clause type: preferred position, fallback range, walk-away, risk weight, required/optional, version. Ships with a pre-built NDA + vendor default so a customer with no legal team starts grounded.
+These models are the whole interface surface. Everything below is expressed in terms of them.
+
+```python
+from pydantic import BaseModel
+
+class Element(BaseModel):
+    id: str
+    kind: str                 # heading | paragraph | table_cell ...
+    text: str
+    start: int; end: int      # char offsets into Document.full_text (load-bearing)
+    heading_path: list[str]   # article > clause > sub-clause
+
+class Document(BaseModel):
+    doc_id: str
+    source_type: str          # docx | pdf | email
+    full_text: str
+    elements: list[Element]
+
+class Clause(BaseModel):
+    id: str; text: str
+    start: int; end: int
+    heading_path: list[str]
+
+class Classification(BaseModel):
+    clause_type: str          # from the playbook taxonomy, NOT CUAD
+    confidence: float
+    spans: list[tuple[int, int]]
+
+class PlaybookRule(BaseModel):
+    id: str                   # e.g. "LL-1"
+    preferred: str
+    fallback: str
+    walk_away: str
+
+class PlaybookClauseType(BaseModel):
+    required: bool
+    risk_weight: int          # missed high-weight clause >> false flag
+    rules: list[PlaybookRule]
+    cuad_map: str | None = None
+    source_doc_ids: list[str] = []   # provenance: which contracts this was inferred from
+
+class Playbook(BaseModel):
+    version: str
+    clause_types: dict[str, PlaybookClauseType]
+
+class ClauseVerdict(BaseModel):
+    clause_id: str
+    branch: str               # verdict | silence | abstain
+    status: str | None        # complies | acceptable_deviation | unacceptable | unusual
+    rule_ids: list[str]
+    spans: list[tuple[int, int]]
+    rationale: str
+    reason: str | None = None # for abstain/silence
+```
+
+---
+
+## 3. Ingestion (DOCX / PDF / email)
+
+Normalize any source into one `Document`; **character offsets are load-bearing** — every citation anchors to `(start, end)`.
+
+- **PDF** (incl. scanned): LandingAI ADE → structured elements with grounding → flatten to `Element[]`.
+- **DOCX**: python-docx walks paragraphs/tables; offsets are exact and we keep the original for tracked-changes export.
+- **Email**: poll a mailbox, extract attachments, route each to the PDF/DOCX adapter; body → metadata, never a clause.
+
+**Prototype decision:** DOCX + PDF upload is the live path; email is a thin adapter reusing the identical path (code-complete, demoed optionally). One `Document` model, three tiny adapters (~30–50 lines each).
+
+*Same ingest path serves both flows — bulk historical contracts (onboarding) and single inbound contracts (runtime).*
+
+---
+
+## 4. Chunk — structural segmentation
+
+No fixed-size windows. Segment by the document's own structure (article → clause → sub-clause) using the heading hierarchy. Sub-clauses inherit `heading_path`, carrying parent context without a tree. Output: flat `list[Clause]`.
+
+---
+
+## 5. Classify — the spine decision
+
+One cheap LLM call per clause: temperature 0, structured output, confidence. Labels come from the **playbook taxonomy (12–20 wedge types)**, not CUAD's 41 (CUAD is an eval yardstick only, §12). Matching a clause to its rules is then a **deterministic lookup** — `playbook.clause_types[clause_type].rules` — no similarity math on the primary path. That lookup is what makes the whole system explainable ("§7.2 → Limitation of Liability → rule `LL-1`").
+
+---
+
+## 6. Playbook Bootstrap — build v0.1 from existing contracts (new module)
+
+**The problem owners told us:** *"We don't have a playbook — it's in our heads."* So we reconstruct it from the contracts they've already signed.
+
+`PlaybookBuilder.build(contracts)` reuses the shared spine, then aggregates:
+
+```
+bulk contracts ─► ingest ─► chunk ─► classify        # reuse §3–5 unchanged
+              ─► group clauses by clause_type
+              ─► for each type: infer preferred / fallback / walk-away
+                 · preferred  = the company's most common (modal) position
+                 · fallback   = the observed range across their contracts
+                 · walk_away  = positions they've never accepted / clear outliers
+                 · risk_weight = default by type, editable
+                 · source_doc_ids = provenance (grounds every inferred rule)
+              ─► Playbook v0.1 (draft, versioned)
+```
+
+The LLM only **summarizes each cluster into a position statement**; the clustering and frequency are deterministic, and every inferred rule cites the `source_doc_ids` it came from — so even the bootstrapped playbook is grounded, not invented.
+
+**Owner editing (`PlaybookEditor`) — two modes, both end in an explicit save:**
+- **Manual:** edit any `preferred` / `fallback` / `walk_away` / `risk_weight` / `required` field directly (validated by the Pydantic model).
+- **Ask-AI:** natural-language request (e.g. *"we never accept liability caps under 12 months"*) → a smolagents loop proposes a rule diff → owner approves → applied.
+- **Save:** bumps `Playbook.version`; the change is written to the audit log (§11).
+
+We still **ship a pre-built NDA + vendor default** so a brand-new company with zero contracts to learn from starts grounded; bootstrap refines it from their actual paper.
+
+---
+
+## 7. Playbook storage schema
+
+Persisted as versioned, diffable **YAML** that round-trips 1:1 with the `Playbook` Pydantic model.
 
 ```yaml
-version: 2026-07-01
+version: 2026-07-01.1
 clause_types:
   limitation_of_liability:
     required: true
-    risk_weight: 5           # missed high-weight clause ≫ false flag (drives eval + routing)
+    risk_weight: 5
+    cuad_map: "Cap On Liability"
+    source_doc_ids: ["c_0192", "c_0207", "c_0233"]   # inferred from these contracts
     rules:
       - id: LL-1
         preferred: "Cap = 12 months' fees; carve-outs for IP/confidentiality/indemnity."
         fallback:  "Cap between 12–24 months' fees."
         walk_away: "Uncapped liability, or cap below 12 months."
-        cuad_map: "Cap On Liability"
 ```
 
-`clauseType` from §3 keys directly into this file. Editing a rule is a one-line diff with a version bump — the entire grounding source is human-checkable.
+Editing a rule is a one-line diff with a version bump — the entire grounding source stays human-checkable.
 
 ---
 
-## 7. Explainable redline generation (depth area)
+## 8. Branch — the three-way product decision
 
-For **Verdict** clauses that deviate but are fixable, we generate a tracked-changes `.docx` that proposes moves toward the preferred position, **each edit citing its rule ID and source span**.
+`Triage.decide(...)` is a pure function over a classification plus a coverage check against the playbook's required types. Exactly one branch fires.
 
-```
-deviating clause + rule ──► LLM proposes edited text (rationale only, grounded)
-                        ──► python-docx writes tracked change + comment("rule LL-1 · §7.2")
-```
+| Branch | Trigger | Output (`ClauseVerdict`) |
+|---|---|---|
+| **Verdict** | Classified, rules matched | `complies` / `acceptable_deviation` / `unacceptable` / `unusual` + cited spans + rule IDs + rationale |
+| **Silence** | A required type has zero hits across the doc | "Contract is silent on X; playbook requires X" |
+| **Abstain** | Low confidence, taxonomy no-fit, or lane disagreement | "Insufficient grounding" + reason → attorney |
 
-- The **risk verdict** is deterministic (rule deviation → risk rubric from the playbook); the **LLM only writes the rationale/replacement prose**, never the risk decision. That split is what makes the output defensible.
-- Output is a **real Word artifact with native tracked changes**, not a web-only diff — the differentiator almost nobody builds.
-- No un-anchored claims: every change carries a comment linking rule ID + character offset.
+**Abstention is the anti-wrapper proof** — a wrapper always answers; Syntra visibly declines and explains why. One LLM judgment call per clause with that clause's rules bundled (preferred/fallback/walk-away in a single prompt).
+
+### 8.1 Lane two — semantic safety net (designed; stubbed in prototype)
+
+Runs only on low-confidence / no-fit clauses. `KnowledgeIndex` (ContextHub) does hybrid **BM25 + embeddings** over company knowledge → legal reranker, driven by a minimal smolagents loop. **Lane disagreement is itself a routing signal → abstain.** Scaffolded for 48h; the deterministic spine ships fully.
 
 ---
 
-## 8. Attorney review queue
+## 9. Retrieval over company knowledge
 
-Most contracts must **auto-clear** (green light + redline, no lawyer) — that's the economics. The queue holds only what crossed a threshold, and each item is a **pre-built brief, not a raw contract**.
+Corpus = `playbook.yaml` + past reviewed contracts + attorney-approved fallbacks. Two consumers:
+1. **Deterministic (always):** the playbook lookup in §5 — a loaded dictionary, no retrieval.
+2. **Semantic (lane two only):** `KnowledgeIndex.search(...)` via ContextHub for precedent on clauses the spine couldn't place.
 
-Three routing signals (not just a score):
+Keeping retrieval *off* the primary path is deliberate: at SMB playbook scale, deterministic matching beats vector search and stays citable.
 
-- **Whether** — all clauses comply/in-fallback and nothing required is missing → auto-clear.
-- **Why** — the specific trigger (`unacceptable` / `silence` / `abstain`) with cited spans + rule attached.
+---
+
+## 10. Explainable redline generation (depth area)
+
+For Verdict clauses that deviate but are fixable, `Redliner.redline(...)` produces a tracked-changes `.docx` proposing moves toward the preferred position, **each edit citing its rule ID and source span**.
+
+```
+deviating clause + rule ─► LLM proposes edited text (rationale only, grounded)
+                       ─► python-docx writes tracked change + comment("rule LL-1 · §7.2")
+```
+
+The **risk verdict is deterministic** (rule deviation → playbook risk rubric); the LLM only writes rationale/replacement prose, never the risk decision. Output is a **real Word artifact with native tracked changes** — the differentiator almost nobody builds. No un-anchored claims.
+
+---
+
+## 11. Attorney review queue
+
+Most contracts must **auto-clear** (green light + redline, no lawyer) — that's the economics. The queue holds only threshold-crossing items, each a **pre-built brief, not a raw contract**. Three routing signals:
+
+- **Whether** — all clauses comply/in-fallback and nothing required missing → auto-clear.
+- **Why** — the specific trigger (`unacceptable` / `silence` / `abstain`) with cited spans + rule.
 - **To whom** — matter type + state + specialization (panel model for v1).
 
-```
-QueueItem {
-  docId, priority(=Σ risk_weight of triggers),
-  triggers: [{ branch, clauseType, ruleId, spans, reason }],
-  brief: { summary, citations[], proposedRedlineDocxRef },
-  assignee, status  // open · in_review · approved · rejected
-}
+```python
+class QueueItem(BaseModel):
+    doc_id: str
+    priority: int                      # Σ risk_weight of triggers
+    triggers: list[ClauseVerdict]
+    proposed_redline_ref: str | None
+    assignee: str | None = None
+    status: str = "open"               # open | in_review | approved | rejected
 ```
 
-**Feedback arrow (the moat):** attorney approves a deviation → optionally promoted to a new fallback rule in `playbook.yaml` (version bump) → the system routes less next time, and every escalation becomes a labeled example for a future calibrator. The attorney is a **role in the loop**, not a second designed user: a functional queue with full context.
+**Feedback arrow (the moat):** attorney approves a deviation → optionally promoted to a new fallback rule via `PlaybookEditor` (version bump) → the system routes less next time, and every escalation becomes a labeled example for a future calibrator. The attorney is a **role in the loop**, not a second designed user.
 
 **UPL guardrail:** framing is always "AI triages and packages; attorney advises." The threshold gate is compliance architecture, not just UX.
 
 ---
 
-## 9. Audit trail schema
+## 12. Audit trail schema
 
-Append-only event log — the trust backbone. Every stage that produces a judgment writes one immutable event. One event view is exposed in the UI.
+Append-only event log — the trust backbone. Every judgment-producing stage (including playbook edits) writes one immutable event; one trace view is exposed in the UI.
 
+```python
+class Citation(BaseModel):
+    rule_id: str | None = None
+    doc_id: str | None = None
+    start: int | None = None
+    end: int | None = None
+
+class AuditEvent(BaseModel):
+    id: str
+    timestamp: str
+    actor: str                 # system:classify | system:redline | attorney:<id> | owner:<id>
+    doc_id: str | None
+    stage: str                 # ingest|classify|branch|redline|route|playbook_edit|attorney_action
+    model: str | None          # name+version, null for deterministic stages
+    prompt_hash: str | None    # reproducibility without storing raw prompts
+    input_hash: str            # hash of the exact input
+    output: dict               # verdict / redline ref / decision / playbook diff
+    citations: list[Citation]
+    prev_hash: str             # chains each event to the previous → tamper-evident
 ```
-AuditEvent {
-  id                 uuid
-  timestamp          iso8601
-  actor              "system:classify" | "system:redline" | "attorney:<id>"
-  docId              string
-  stage              ingest | classify | branch | redline | route | attorney_action
-  model              string | null        # name+version, null for deterministic stages
-  prompt_hash        sha256 | null        # reproducibility without storing raw prompts
-  input_hash         sha256               # hash of the exact input (clause/doc)
-  output             json                 # verdict / redline ref / decision
-  citations          [{ ruleId?, docId?, start?, end? }]
-  prev_hash          sha256               # chain each event to the previous → tamper-evident
-}
-```
 
-- **Append-only + `prev_hash` chaining** makes the log tamper-evident without a database feature.
-- Hashing prompts/inputs gives reproducibility and privilege-safety (we can prove *what* ran without storing sensitive raw text in the log).
-- Privilege control is a **simple role gate** (operator vs. attorney) — present, not elaborate.
+- **Append-only + `prev_hash` chaining** → tamper-evident without a special DB feature.
+- Hashing prompts/inputs → reproducibility and privilege-safety (prove *what* ran without storing sensitive raw text).
+- Privilege control is a **simple role gate** (owner/operator vs. attorney) — present, not elaborate.
 
 ---
 
-## 10. Evaluation (lives here, never as an in-product dashboard)
+## 13. Evaluation (lives here, never as an in-product dashboard)
 
-- **Public benchmarks:** CUAD (clause-extraction F1, Jaccard-threshold spans), ContractNLI (NDA entailment — maps to the wedge), ContractEval framing (correctness F1 + false-no-clause / "laziness" rate → we report our **abstention rate** against it). LegalBench-RAG only if lane two ships.
-- **Named gap:** all public sets are SEC/EDGAR large-cap, well-drafted paper; SME inbound is messier — **public numbers ≠ product numbers.**
-- **Bespoke golden set:** small set of real/synthetic SME NDAs + vendor contracts, scored on *weighted* recall (missed liability cap ≫ false flag), precision (no reviewer flooding), routing accuracy (human-needed vs auto-clear), and silence detection.
+- **Public benchmarks:** CUAD (clause-extraction F1, Jaccard spans), ContractNLI (NDA entailment → wedge), ContractEval framing (correctness F1 + false-no-clause rate → we report our **abstention rate**). LegalBench-RAG only if lane two ships.
+- **Named gap:** public sets are SEC/EDGAR large-cap, well-drafted; SME inbound is messier — **public numbers ≠ product numbers.**
+- **Bespoke golden set:** small real/synthetic SME NDAs + vendor contracts, scored on *weighted* recall (missed liability cap ≫ false flag), precision (no reviewer flooding), routing accuracy, silence detection.
+- **Bootstrap-specific check:** does an inferred playbook v0.1 agree with an attorney's hand-authored playbook on the same contract set? (measures onboarding quality).
 
 ---
 
-## 11. Killed alternatives (rationale kept — the panel will probe)
+## 14. Killed alternatives (rationale kept — the panel will probe)
 
 - **Perplexity as matcher — killed.** Measures predictability, not relevance; boilerplate scores low, dangerous bespoke drafting scores high. Salvage: perplexity vs. standard language = a *novelty detector* for v2 routing.
-- **Reranker as primary matcher — demoted** to lane two. A taxonomy lookup is categorically more explainable than a 0.83 cross-encoder score.
-- **Binary contradiction as output space — killed.** Floods false positives on in-fallback deviations and structurally cannot detect *absence* (pairwise checks need both paragraphs to exist; the worst risks are missing clauses).
+- **Reranker as primary matcher — demoted** to lane two. Taxonomy lookup is categorically more explainable than a 0.83 cross-encoder score.
+- **Binary contradiction as output space — killed.** Floods false positives on in-fallback deviations and cannot detect *absence* (pairwise checks need both paragraphs; the worst risks are missing clauses).
 - **Trained classifier / feature-binned NN — killed for v1.** No labels, destroys explainability, can't emit grounded redlines; binning discards the "shall vs. may" signal.
-- **TabPFN / tabular foundation models — right tool, wrong stage.** Needs labeled rows at inference, which only exist after the attorney loop runs. Named **v2 routing-calibrator** candidate (small-sample tabular is its sweet spot).
+- **TabPFN / tabular foundation models — right tool, wrong stage.** Needs labeled rows at inference, which only exist after the attorney loop runs. Named **v2 routing-calibrator** candidate.
 
 ---
 
-## 12. v2 flywheel
+## 15. v2 flywheel
 
-Every attorney decision is a labeled example. Once enough accumulate, a small tabular calibrator (TabPFN-class) learns the *human-needed vs. auto-clear* boundary from the audit trail, tightening routing over time — while the deterministic playbook spine and full citation chain remain the source of truth. No fine-tuned black box ever sits between the clause and its verdict.
+Every attorney decision is a labeled example. Once enough accumulate in the audit trail, a small tabular calibrator (TabPFN-class) learns the *human-needed vs. auto-clear* boundary, tightening routing over time — while the deterministic playbook spine and full citation chain remain the source of truth. No fine-tuned black box ever sits between a clause and its verdict.
 
 ---
 
-### Appendix — why the code stays small
+### Appendix — why the code stays small *and* modular
 
-Each stage is one typed function: `ingest → chunk → classify → branch → route → redline → audit`. Adapters and stages are 20–50 lines each; the heavy lifting (OCR, layout, embeddings, retrieval, Word I/O) is delegated to LandingAI ADE, ContextHub, python-docx, and smolagents. The only bespoke logic we own is the legal spine — classification prompt, deterministic playbook lookup, three-way branch, and the audit chain — which is exactly the part a reviewer needs to be able to read end-to-end.
+Each stage is one class with one job (§1 module map), depending only on Pydantic models — never on another stage's internals. Adapters and stages are 20–50 lines; the heavy lifting (OCR, layout, embeddings, retrieval, Word I/O) is delegated to LandingAI ADE, ContextHub, python-docx, and smolagents. Sentrux supervises the module boundaries so the structure stays clean as the code grows. The only bespoke logic we own is the legal spine — classification prompt, deterministic playbook lookup, playbook inference, three-way branch, and the audit chain — which is exactly the part a reviewer needs to read end-to-end.
