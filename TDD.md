@@ -5,7 +5,7 @@
 **Design tenets (non-negotiable):**
 1. **Python only.** One language, end to end — pipeline, API, and UI. No JavaScript, no TypeScript, no separate frontend build step.
 2. **Single-file UI.** The entire web interface lives in `app.py` (Flask). Simple routes, Jinja2 templates. A reviewer can read the whole UI in one sitting.
-3. **Clear architecture, minimal code.** Every stage is a small, single-responsibility class with typed inputs and outputs. We buy the hard parts (OCR, layout, embeddings, retrieval, Word I/O) off the shelf and write only the glue and the legal logic.
+3. **Asset-light by default.** Every stage is a small, single-responsibility class with typed inputs and outputs. We **lean on managed APIs and mature OS libraries for every commodity** — OCR, layout, chunking, embeddings, retrieval, Word I/O, agent loops — and write only the thin glue and the legal logic that is genuinely ours. If a credible API or OS project already solves it, we integrate it rather than rebuild it. The bar for writing bespoke code is "no one has solved this for us," and that bar is only met by the legal wedge.
 4. **Modular and readable.** Named classes with explicit attributes and methods, one concern each. A reviewer can trace one clause from bytes to redline in a single sitting, and swap any stage without touching the others.
 5. **Typed everywhere.** All data models are **Pydantic** models — they *are* the contract between modules, validated at every boundary.
 6. **Supervised architecture.** **Sentrux** runs as the architecture-quality gate over module boundaries, so the structure stays clean as the code grows.
@@ -42,7 +42,7 @@ Two flows share the same spine (`ingest → chunk → classify`):
 
 ## 1. Stack & reused building blocks
 
-We write glue and legal logic; everything hard is delegated.
+**API-first and asset-light:** we write glue and legal logic; everything hard is delegated to a managed API or a mature OS library. The table below is deliberately long — every row is a thing we *didn't* build.
 
 | Concern | Component | Why |
 |---|---|---|
@@ -54,6 +54,7 @@ We write glue and legal logic; everything hard is delegated.
 | Data models & validation | **Pydantic** | One typed contract per module boundary; validation is free. |
 | Architecture-quality supervision | **Sentrux** | Structural/fitness checks over module boundaries — keeps the layering honest as code grows. |
 | PDF/scanned OCR + layout + offsets | **LandingAI ADE** (`ade-python`) | Agentic extraction with source grounding; no reinventing OCR. |
+| Structural chunking | **`langchain-text-splitters`** | Reuse battle-tested, structure-aware splitters over ADE's hierarchy; we write only the offset-mapping adapter, never a splitter. (Standalone package — not all of LangChain.) |
 | Native DOCX read + tracked-changes write | **python-docx** | Real Word artifact, not a web diff. |
 | Email intake *(v2)* | **mailparse / IMAP poll** | Pure mechanics — pulls attachments into the same ingest path; no new architecture needed. |
 | Retrieval over company knowledge | **ContextHub** (`github.com/andrewyng/context-hub`) | Drop-in hybrid retrieval over our corpus; used only by lane two. |
@@ -167,9 +168,9 @@ Normalize any source into one `Document`; **character offsets are load-bearing**
 
 ---
 
-## 4. Chunk — structural segmentation
+## 4. Chunk — structural segmentation (off-the-shelf)
 
-No fixed-size windows. Segment by the document's own structure (article → clause → sub-clause) using the heading hierarchy. Sub-clauses inherit `heading_path`, carrying parent context without a tree. Output: flat `list[Clause]`.
+No fixed-size windows, and **no bespoke splitter**. We reuse **LangChain's** structure-aware splitters (`RecursiveCharacterTextSplitter` / `MarkdownHeaderTextSplitter`, via the standalone `langchain-text-splitters` package) seeded from the article → clause → sub-clause hierarchy that **LandingAI ADE already emits**. ADE supplies the structure; LangChain turns it into clean, boundary-respecting chunks. Our own code is a ~20-line adapter that maps splitter output back onto exact character offsets and fills `heading_path` — sub-clauses inherit their parent's path, carrying context without a tree. Output: flat `list[Clause]`. Chunking is a commodity; the value we add is the offsets that make every downstream citation anchorable.
 
 ---
 
@@ -514,7 +515,7 @@ syntra/
 ├── pipeline/
 │   ├── ingestor.py          ← Ingestor   — PDF (ADE) + DOCX (python-docx) → Document
 │   ├── segmenter.py         ← Segmenter  — Document → Segment  (doc-level: side + service line)
-│   ├── chunker.py           ← Chunker    — Document → list[Clause]
+│   ├── chunker.py           ← Chunker    — Document → list[Clause]  (langchain-text-splitters + offset adapter)
 │   ├── classifier.py        ← Classifier — Clause → Classification  (1 LLM call, temp 0)
 │   ├── triage.py            ← Triage     — Classification + Segment + Playbook → ClauseVerdict
 │   ├── redliner.py          ← Redliner   — ClauseVerdict[] → tracked-changes .docx
@@ -569,4 +570,4 @@ The decisions above imply answers to the questions a technical panel will ask. S
 
 ### Appendix — why the code stays small *and* modular
 
-Each stage is one class with one job (§1 module map), depending only on Pydantic models — never on another stage's internals. Adapters and stages are 20–50 lines; the heavy lifting (OCR, layout, embeddings, retrieval, Word I/O) is delegated to LandingAI ADE, ContextHub, python-docx, and smolagents. Sentrux supervises the module boundaries so the structure stays clean as the code grows. The only bespoke logic we own is the legal spine — classification prompt, deterministic playbook lookup, playbook inference, three-way branch, and the audit chain — which is exactly the part a reviewer needs to read end-to-end.
+Each stage is one class with one job (§1 module map), depending only on Pydantic models — never on another stage's internals. Adapters and stages are 20–50 lines; the heavy lifting (OCR, layout, chunking, embeddings, retrieval, Word I/O, agent loops) is delegated to LandingAI ADE, `langchain-text-splitters`, ContextHub, python-docx, and smolagents. Sentrux supervises the module boundaries so the structure stays clean as the code grows. The only bespoke logic we own is the legal spine — classification prompt, deterministic playbook lookup, playbook inference, three-way branch, and the audit chain — which is exactly the part a reviewer needs to read end-to-end.
