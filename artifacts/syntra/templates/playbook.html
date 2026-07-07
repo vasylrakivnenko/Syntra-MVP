@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+{% block title %}Playbook Matrix — Syntra{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h3 class="fw-bold mb-0">Service × Policy Matrix</h3>
+    <small class="text-muted">Version {{ playbook.version }}</small>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#addRowModal">
+      <i class="bi bi-plus-lg"></i> Row
+    </button>
+    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#addColModal">
+      <i class="bi bi-plus-lg"></i> Column
+    </button>
+    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#aiModal">
+      ✨ Ask AI
+    </button>
+  </div>
+</div>
+
+<div class="card">
+<div class="table-responsive">
+<table class="table table-bordered matrix-table mb-0 bg-white">
+  <thead class="table-dark">
+    <tr>
+      <th style="min-width:140px;">Service line</th>
+      <th style="width:80px;">Side</th>
+      {% for policy in playbook.policies %}
+      <th style="min-width:180px;">
+        {{ policy.label }}
+        {% if policy.required %}<span class="badge bg-danger ms-1 small">required</span>{% endif %}
+        <form method="POST" action="/playbook/save" class="d-inline ms-1">
+          <input type="hidden" name="action" value="delete_column">
+          <input type="hidden" name="policy_id" value="{{ policy.id }}">
+          <button type="submit" class="btn btn-link btn-sm text-danger p-0 border-0"
+                  onclick="return confirm('Delete column {{ policy.label }}?')" title="Delete">×</button>
+        </form>
+      </th>
+      {% endfor %}
+      <th style="width:40px;"></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for sl in playbook.service_lines %}
+  <tr>
+    <td class="fw-semibold">{{ sl.label }}</td>
+    <td>
+      <span class="badge rounded-pill bg-{{ 'primary' if sl.side == 'supplier' else 'success' }}">
+        {{ sl.side }}
+      </span>
+    </td>
+    {% for policy in playbook.policies %}
+    {% set cell = sl.positions.get(policy.id) %}
+    <td>
+      {% if cell %}
+      <div class="small text-success fw-semibold">
+        {{ cell.preferred[:55] }}{% if cell.preferred | length > 55 %}…{% endif %}
+      </div>
+      <div class="small text-muted">
+        ↘ {{ cell.fallback[:40] }}{% if cell.fallback | length > 40 %}…{% endif %}
+      </div>
+      <button type="button" class="btn btn-link btn-sm p-0 text-secondary"
+              onclick="editCell('{{ sl.id }}','{{ policy.id }}',
+                {{ cell.preferred | tojson }},{{ cell.fallback | tojson }},{{ cell.walk_away | tojson }})">
+        edit
+      </button>
+      {% else %}
+      <span class="text-muted small">— gap</span>
+      <button type="button" class="btn btn-link btn-sm p-0"
+              onclick="editCell('{{ sl.id }}','{{ policy.id }}','','','')">add</button>
+      {% endif %}
+    </td>
+    {% endfor %}
+    <td>
+      <form method="POST" action="/playbook/save" class="d-inline">
+        <input type="hidden" name="action" value="delete_row">
+        <input type="hidden" name="service_line_id" value="{{ sl.id }}">
+        <button type="submit" class="btn btn-link btn-sm text-danger p-0 border-0"
+                onclick="return confirm('Delete row {{ sl.label }}?')">✕</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+</div>
+
+{# ── Edit-cell modal ── #}
+<div class="modal fade" id="editCellModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="POST" action="/playbook/save">
+      <input type="hidden" name="action" value="edit_cell">
+      <input type="hidden" name="service_line_id" id="ecSlId">
+      <input type="hidden" name="policy_id" id="ecPolId">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">Edit Position</h5></div>
+        <div class="modal-body">
+          <div class="mb-2">
+            <label class="form-label fw-semibold text-success small">Preferred</label>
+            <input class="form-control" name="preferred" id="ecPreferred"
+                   placeholder="e.g. Net 30 from invoice">
+          </div>
+          <div class="mb-2">
+            <label class="form-label fw-semibold small">Fallback</label>
+            <input class="form-control" name="fallback" id="ecFallback"
+                   placeholder="Acceptable alternative">
+          </div>
+          <div class="mb-2">
+            <label class="form-label fw-semibold text-danger small">Walk-away</label>
+            <input class="form-control" name="walk_away" id="ecWalkAway"
+                   placeholder="We will not accept…">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save position</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Add Row modal ── #}
+<div class="modal fade" id="addRowModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="POST" action="/playbook/save">
+      <input type="hidden" name="action" value="add_row">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">Add Service Line</h5></div>
+        <div class="modal-body">
+          <div class="mb-2">
+            <label class="form-label">Label</label>
+            <input class="form-control" name="label" placeholder="e.g. Fuel cards" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Side</label>
+            <select class="form-select" name="side">
+              <option value="supplier">Supplier (we buy)</option>
+              <option value="customer">Customer (we sell)</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Add Column modal ── #}
+<div class="modal fade" id="addColModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="POST" action="/playbook/save">
+      <input type="hidden" name="action" value="add_column">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">Add Policy Column</h5></div>
+        <div class="modal-body">
+          <div class="mb-2">
+            <label class="form-label">Label</label>
+            <input class="form-control" name="label" placeholder="e.g. Data protection" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Clause type</label>
+            <select class="form-select" name="clause_type">
+              <option value="payment_terms">Payment terms</option>
+              <option value="limitation_of_liability">Limitation of liability</option>
+              <option value="indemnification">Indemnification</option>
+              <option value="term_and_termination">Term & termination</option>
+              <option value="confidentiality">Confidentiality</option>
+              <option value="ip_ownership">IP ownership</option>
+              <option value="governing_law">Governing law</option>
+              <option value="auto_renewal">Auto-renewal</option>
+              <option value="data_protection">Data protection</option>
+              <option value="assignment">Assignment</option>
+              <option value="warranties">Warranties</option>
+              <option value="dispute_resolution">Dispute resolution</option>
+              <option value="insurance">Insurance</option>
+              <option value="non_solicitation">Non-solicitation</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Ask-AI modal ── #}
+<div class="modal fade" id="aiModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">✨ Ask AI to edit playbook</h5></div>
+      <div class="modal-body">
+        <textarea class="form-control" id="aiPrompt" rows="3"
+          placeholder='e.g. "We never accept liability caps under 12 months on customer contracts"'></textarea>
+        <div id="aiResult" class="mt-3 small"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="aiSubmit">Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+function editCell(slId, polId, preferred, fallback, walkAway) {
+  document.getElementById('ecSlId').value     = slId;
+  document.getElementById('ecPolId').value    = polId;
+  document.getElementById('ecPreferred').value = preferred;
+  document.getElementById('ecFallback').value  = fallback;
+  document.getElementById('ecWalkAway').value  = walkAway;
+  new bootstrap.Modal(document.getElementById('editCellModal')).show();
+}
+
+document.getElementById('aiSubmit').addEventListener('click', async () => {
+  const prompt  = document.getElementById('aiPrompt').value.trim();
+  const resultEl = document.getElementById('aiResult');
+  if (!prompt) return;
+  resultEl.innerHTML = '<span class="text-muted">Thinking…</span>';
+  document.getElementById('aiSubmit').disabled = true;
+  try {
+    const res  = await fetch('/playbook/ai', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({prompt}),
+    });
+    const data = await res.json();
+    if (data.success) {
+      const items = (data.changes || []).map(c => `<li>${c}</li>`).join('');
+      resultEl.innerHTML = `<strong>Changes saved:</strong><ul class="mb-0 mt-1">${items}</ul>
+        <a href="/playbook" class="btn btn-sm btn-success mt-2">Reload matrix</a>`;
+    } else {
+      resultEl.innerHTML = `<span class="text-danger">Error: ${data.error}</span>`;
+    }
+  } catch(e) {
+    resultEl.innerHTML = `<span class="text-danger">Error: ${e}</span>`;
+  } finally {
+    document.getElementById('aiSubmit').disabled = false;
+  }
+});
+</script>
+{% endblock %}

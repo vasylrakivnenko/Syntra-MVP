@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Contract Review — Syntra{% endblock %}
+{% block content %}
+
+{# ── header ── #}
+<div class="d-flex justify-content-between align-items-start mb-3">
+  <div>
+    <h3 class="fw-bold mb-0">{{ doc.filename }}</h3>
+    <small class="text-muted">
+      Service:&nbsp;<strong>{{ (doc.service_line or '—').replace('_',' ') | title }}</strong>
+      &nbsp;·&nbsp;Side:&nbsp;<strong>{{ doc.side or '—' }}</strong>
+      &nbsp;·&nbsp;{{ doc.uploaded_at[:10] if doc.uploaded_at else '—' }}
+    </small>
+  </div>
+  <div class="d-flex gap-2">
+    {% if redline_available %}
+    <a href="/contracts/{{ doc.doc_id }}/download" class="btn btn-success btn-sm">
+      <i class="bi bi-file-earmark-word me-1"></i>Download Redline
+    </a>
+    {% endif %}
+    <a href="/contracts" class="btn btn-outline-secondary btn-sm">← All contracts</a>
+  </div>
+</div>
+
+{# ── risk summary ── #}
+{% set issues     = verdicts | selectattr('branch','equalto','verdict') | selectattr('status','ne','complies') | list %}
+{% set silences   = verdicts | selectattr('branch','equalto','silence') | list %}
+{% set abstains   = verdicts | selectattr('branch','equalto','abstain') | list %}
+{% set unaccept   = verdicts | selectattr('status','equalto','unacceptable') | list %}
+{% set deviations = verdicts | selectattr('status','equalto','acceptable_deviation') | list %}
+
+<div class="card mb-4">
+  <div class="card-header bg-dark text-white fw-semibold">
+    <i class="bi bi-shield-exclamation me-1"></i>Plain-Language Risk Summary
+  </div>
+  <div class="card-body">
+    {% if not issues and not silences %}
+    <p class="text-success mb-0">
+      <i class="bi bi-check-circle-fill me-1"></i>
+      No material issues found — contract appears to comply with playbook positions.
+    </p>
+    {% else %}
+      {% if silences %}
+      <div class="alert alert-danger py-2 mb-3">
+        <strong><i class="bi bi-x-octagon me-1"></i>Missing required clauses:</strong>
+        {{ silences | map(attribute='reason') | join('; ') }}
+      </div>
+      {% endif %}
+      {% if unaccept %}
+      <p class="mb-2">
+        <span class="badge bg-danger me-1">{{ unaccept | length }} unacceptable</span>
+        Clauses that breach walk-away positions — must be renegotiated.
+      </p>
+      {% endif %}
+      {% if deviations %}
+      <p class="mb-2">
+        <span class="badge bg-warning text-dark me-1">{{ deviations | length }} acceptable deviations</span>
+        Within fallback range — flag for awareness.
+      </p>
+      {% endif %}
+      {% for v in (issues + silences)[:6] %}
+      <div class="d-flex align-items-start gap-2 mb-2 ps-2 border-start border-3 border-{{ 'danger' if v.status == 'unacceptable' or v.branch == 'silence' else 'warning' }}">
+        <div>
+          <span class="fw-semibold small">{{ (v.clause_type or v.branch or '').replace('_',' ') | title }}</span>
+          {% if v.rationale %}<span class="text-muted small"> — {{ v.rationale }}</span>{% endif %}
+          {% if v.reason %}<span class="text-muted small"> — {{ v.reason }}</span>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+      {% if (issues + silences) | length > 6 %}
+      <small class="text-muted">… and {{ (issues + silences) | length - 6 }} more issues below.</small>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+{# ── stats strip ── #}
+<div class="d-flex gap-2 mb-3 flex-wrap">
+  <span class="badge bg-danger fs-6 px-3">{{ unaccept | length }} unacceptable</span>
+  <span class="badge bg-warning text-dark fs-6 px-3">{{ deviations | length }} deviations</span>
+  <span class="badge bg-success fs-6 px-3">{{ verdicts | selectattr('status','equalto','complies') | list | length }} comply</span>
+  <span class="badge bg-secondary fs-6 px-3">{{ silences | length }} silent</span>
+  <span class="badge bg-light text-dark fs-6 px-3">{{ abstains | length }} abstained</span>
+</div>
+
+{# ── clause list ── #}
+<h6 class="text-muted fw-semibold mb-2">CLAUSE-BY-CLAUSE ANALYSIS ({{ verdicts | length }} clauses)</h6>
+
+{% for v in verdicts %}
+{% if v.branch != 'abstain' or loop.index <= 5 %}
+<div class="card mb-2 verdict-{{ v.status or v.branch }}">
+  <div class="card-body py-2 px-3">
+    <div class="d-flex justify-content-between align-items-start">
+      <small class="text-muted">{{ (v.clause_type or '').replace('_',' ') | title }}</small>
+      <span class="badge bg-{{ 'danger' if v.status == 'unacceptable' else 'warning text-dark' if v.status == 'acceptable_deviation' else 'success' if v.status == 'complies' else 'secondary' }} ms-2 text-nowrap">
+        {{ (v.status or v.branch or '').replace('_',' ').upper() }}
+      </span>
+    </div>
+    <p class="mb-1 small mt-1" style="opacity:.85;">
+      {{ v.clause_text[:250] if v.clause_text else '' }}{% if v.clause_text and v.clause_text | length > 250 %}…{% endif %}
+    </p>
+    {% if v.rationale %}
+    <small class="text-muted"><i class="bi bi-quote"></i> {{ v.rationale }}</small>
+    {% endif %}
+    {% if v.reason %}
+    <small class="text-muted fst-italic">{{ v.reason }}</small>
+    {% endif %}
+    {% if v.rule_ids %}
+    <div class="mt-1"><small class="text-muted">Rule: <code>{{ v.rule_ids | join(', ') }}</code></small></div>
+    {% endif %}
+    {% if v.suggested_text %}
+    <div class="mt-1 p-1 bg-light rounded border-start border-primary border-3">
+      <small class="text-primary"><i class="bi bi-pencil-square me-1"></i><strong>Suggestion:</strong> {{ v.suggested_text }}</small>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+
+{% if abstains | length > 5 %}
+<p class="text-muted small mt-2"><i class="bi bi-info-circle"></i> {{ abstains | length - 5 }} additional abstained clauses hidden (low-confidence / no playbook coverage).</p>
+{% endif %}
+
+{% endblock %}

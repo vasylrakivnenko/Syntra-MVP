@@ -1,0 +1,24 @@
+kind = "api"
+previewPath = "/"
+title = "Syntra"
+version = "1.0.0"
+id = "SYNtra0appXXYY12345z"
+
+[[services]]
+localPort = 5000
+name = "Syntra"
+paths = ["/"]
+
+[services.development]
+run = "python3 artifacts/syntra/app.py"
+
+[services.production]
+
+[services.production.run]
+args = ["python3", "artifacts/syntra/app.py"]
+
+[services.production.run.env]
+PORT = "5000"
+
+[services.production.health.startup]
+path = "/"

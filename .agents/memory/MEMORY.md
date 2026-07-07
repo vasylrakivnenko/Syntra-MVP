@@ -1,0 +1,1 @@
+- [Python artifact registration](python-artifact-registration.md) — register Flask apps in the monorepo: createArtifact first, then verifyAndReplaceArtifactToml; keep integratedSkills unchanged.

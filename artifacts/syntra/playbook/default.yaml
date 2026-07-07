@@ -1,0 +1,114 @@
+version: "2026-07-07.default"
+
+policies:
+  - id: payment_terms
+    label: "Payment terms"
+    clause_type: payment_terms
+    required: true
+    risk_weight: 4
+    cuad_map: "Payment Terms"
+
+  - id: limitation_of_liability
+    label: "Limitation of liability"
+    clause_type: limitation_of_liability
+    required: true
+    risk_weight: 5
+    cuad_map: "Cap On Liability"
+
+  - id: term_and_termination
+    label: "Term & termination"
+    clause_type: term_and_termination
+    required: false
+    risk_weight: 3
+    cuad_map: "Expiration Date"
+
+  - id: confidentiality
+    label: "Confidentiality"
+    clause_type: confidentiality
+    required: false
+    risk_weight: 3
+    cuad_map: "Non-Compete"
+
+  - id: indemnification
+    label: "Indemnification"
+    clause_type: indemnification
+    required: false
+    risk_weight: 4
+
+  - id: governing_law
+    label: "Governing law"
+    clause_type: governing_law
+    required: false
+    risk_weight: 2
+
+service_lines:
+  - id: general_supplier
+    label: "General (supplier)"
+    side: supplier
+    positions:
+      payment_terms:
+        id: PT-GEN-SUP-1
+        preferred: "Net 30 from invoice"
+        fallback: "Net 15–45 from invoice"
+        walk_away: "Payment on delivery or prepayment required"
+        risk_weight: 4
+        source_doc_ids: []
+      limitation_of_liability:
+        id: LL-GEN-SUP-1
+        preferred: "Cap = 12 months fees; carve-outs for IP, confidentiality, fraud"
+        fallback: "Cap 12–24 months fees with same carve-outs"
+        walk_away: "Uncapped liability or cap below 6 months fees"
+        risk_weight: 5
+        source_doc_ids: []
+      term_and_termination:
+        id: TT-GEN-SUP-1
+        preferred: "1-year term, auto-renew, 30-day written termination for convenience"
+        fallback: "1-year term with 60-day termination notice"
+        walk_away: "No termination for convenience / lock-in over 2 years"
+        risk_weight: 3
+        source_doc_ids: []
+      indemnification:
+        id: IND-GEN-SUP-1
+        preferred: "Mutual indemnification for own negligence/breach"
+        fallback: "Mutual indemnification with carve-outs for gross negligence"
+        walk_away: "One-sided indemnification solely at our expense"
+        risk_weight: 4
+        source_doc_ids: []
+
+  - id: general_customer
+    label: "General (customer)"
+    side: customer
+    positions:
+      payment_terms:
+        id: PT-GEN-CUST-1
+        preferred: "Net 15 end-of-month"
+        fallback: "Net 30 end-of-month"
+        walk_away: "Over 45 days or milestone-contingent"
+        risk_weight: 4
+        source_doc_ids: []
+      limitation_of_liability:
+        id: LL-GEN-CUST-1
+        preferred: "Cap = 12 months fees paid; mutual"
+        fallback: "Cap up to 24 months with mutual carve-outs"
+        walk_away: "Customer liability uncapped while ours is capped"
+        risk_weight: 5
+        source_doc_ids: []
+      confidentiality:
+        id: CONF-GEN-CUST-1
+        preferred: "Mutual NDA; 3-year post-termination obligation; standard exclusions"
+        fallback: "Mutual NDA; up to 5 years; carve-outs for independently developed IP"
+        walk_away: "Perpetual obligation with no carve-outs for public domain"
+        risk_weight: 3
+        source_doc_ids: []
+
+  - id: nda_standalone
+    label: "NDA (standalone)"
+    side: supplier
+    positions:
+      confidentiality:
+        id: CONF-NDA-1
+        preferred: "Mutual; 2-year term; standard exclusions; no residuals clause"
+        fallback: "Mutual; up to 3-year term; residuals clause acceptable if narrowly scoped"
+        walk_away: "One-sided NDA only in counterparty's favour"
+        risk_weight: 3
+        source_doc_ids: []

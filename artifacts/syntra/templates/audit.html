@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Audit Log — Syntra{% endblock %}
+{% block content %}
+<h3 class="fw-bold mb-1">Audit Log</h3>
+<p class="text-muted small mb-4">
+  Append-only, SHA-256 hash-chained. Every pipeline run, review decision,
+  and playbook edit is recorded here.
+</p>
+
+{% if events %}
+<div class="card">
+<table class="table table-sm table-hover mb-0">
+  <thead class="table-dark">
+    <tr>
+      <th>Timestamp (UTC)</th>
+      <th>Actor</th>
+      <th>Action</th>
+      <th>Input ref</th>
+      <th>Prev hash</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for e in events %}
+  <tr>
+    <td><small class="font-monospace">{{ e.ts[:19] if e.ts else '—' }}</small></td>
+    <td><small>{{ e.actor_id }}</small></td>
+    <td><code class="small">{{ e.action }}</code></td>
+    <td><small class="text-muted font-monospace">{{ (e.input_hash or '')[:12] }}…</small></td>
+    <td><small class="text-muted font-monospace">{{ (e.prev_hash or '—')[:12] }}{% if e.prev_hash %}…{% endif %}</small></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="text-muted small mt-2">Showing last 100 events.</p>
+{% else %}
+<div class="card text-center p-5 text-muted">
+  <i class="bi bi-journal display-4 mb-2"></i>
+  <p>No audit events yet. Upload a contract to generate the first entry.</p>
+</div>
+{% endif %}
+{% endblock %}

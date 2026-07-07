@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Attorney Review — Syntra{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h3 class="fw-bold mb-0">Attorney Review</h3>
+    <small class="text-muted">Doc ID: <code>{{ item.doc_id }}</code></small>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="/contracts/{{ item.doc_id }}/download" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-file-earmark-word me-1"></i>Redline
+    </a>
+    <a href="/queue" class="btn btn-outline-secondary btn-sm">← Queue</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  {# ── clause verdicts ── #}
+  <div class="col-lg-8">
+  {% for v in verdicts %}
+  {% if v.branch != 'abstain' %}
+  <div class="card mb-2 verdict-{{ v.status or v.branch }}">
+    <div class="card-body py-2 px-3">
+      <div class="d-flex justify-content-between align-items-start">
+        <div class="flex-grow-1">
+          <small class="text-muted">{{ (v.clause_type or '').replace('_',' ') | title }}</small>
+          <span class="badge ms-1 bg-{{ 'danger' if v.status == 'unacceptable' else 'warning text-dark' if v.status == 'acceptable_deviation' else 'success' if v.status == 'complies' else 'secondary' }}">
+            {{ (v.status or v.branch or '').replace('_',' ').upper() }}
+          </span>
+          <p class="mb-1 small mt-1">{{ v.clause_text[:300] if v.clause_text else '' }}</p>
+          {% if v.rationale %}
+          <small class="text-muted fst-italic"><i class="bi bi-quote"></i> {{ v.rationale }}</small>
+          {% endif %}
+          {% if v.reason %}
+          <small class="text-muted fst-italic">{{ v.reason }}</small>
+          {% endif %}
+          {% if v.suggested_text %}
+          <div class="mt-1 p-1 bg-light rounded border-start border-primary border-3">
+            <small class="text-primary"><i class="bi bi-pencil-square me-1"></i>{{ v.suggested_text }}</small>
+          </div>
+          {% endif %}
+        </div>
+        {# promote-to-fallback for acceptable deviations #}
+        {% if v.status == 'acceptable_deviation' %}
+        <form method="POST" action="/queue/{{ item.item_id }}/promote" class="ms-2 flex-shrink-0">
+          <input type="hidden" name="clause_id" value="{{ v.clause_id }}">
+          <button class="btn btn-outline-success btn-sm" title="Promote clause text to fallback in playbook">
+            <i class="bi bi-arrow-up-circle"></i> Promote
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% endfor %}
+  </div>
+
+  {# ── decision panel ── #}
+  <div class="col-lg-4">
+    <div class="card sticky-top" style="top:80px;">
+      <div class="card-header fw-semibold bg-dark text-white">Decision</div>
+      <div class="card-body">
+        <form method="POST">
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Attorney notes</label>
+            <textarea class="form-control" name="notes" rows="5"
+              placeholder="Redline rationale, exceptions granted, next steps…"></textarea>
+          </div>
+          <div class="d-grid gap-2">
+            <button name="decision" value="approved" type="submit" class="btn btn-success">
+              <i class="bi bi-check-lg me-1"></i>Approve
+            </button>
+            <button name="decision" value="rejected" type="submit" class="btn btn-danger">
+              <i class="bi bi-x-lg me-1"></i>Reject — send back
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

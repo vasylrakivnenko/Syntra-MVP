@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Review Queue — Syntra{% endblock %}
+{% block content %}
+<h3 class="fw-bold mb-1">Attorney Queue</h3>
+<p class="text-muted small mb-4">Contracts escalated for human review, sorted by risk priority.</p>
+
+{% if items %}
+<div class="list-group">
+{% for item in items %}
+<div class="list-group-item list-group-item-action px-4 py-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h6 class="mb-0 fw-semibold">{{ item.filename }}</h6>
+      <small class="text-muted">
+        Service: {{ (item.service_line or '—').replace('_',' ') | title }}
+        &nbsp;·&nbsp;Side: {{ item.side or '—' }}
+        &nbsp;·&nbsp;Priority score: <strong>{{ item.priority }}</strong>
+      </small>
+    </div>
+    <a href="/queue/{{ item.item_id }}/review" class="btn btn-primary btn-sm">
+      <i class="bi bi-pencil-square me-1"></i>Review
+    </a>
+  </div>
+</div>
+{% endfor %}
+</div>
+{% else %}
+<div class="card text-center p-5">
+  <i class="bi bi-check2-circle display-4 text-success mb-2"></i>
+  <p class="mb-0 text-muted">Queue is empty — no pending reviews.</p>
+</div>
+{% endif %}
+{% endblock %}

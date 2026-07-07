@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Contracts — Syntra{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h3 class="fw-bold mb-0">All Contracts</h3>
+  <a href="/upload" class="btn btn-dark btn-sm"><i class="bi bi-upload me-1"></i>Upload</a>
+</div>
+{% if docs %}
+<div class="card">
+  <table class="table table-hover mb-0">
+    <thead class="table-light">
+      <tr><th>File</th><th>Service line</th><th>Side</th><th>Status</th><th>Uploaded</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for d in docs %}
+    <tr>
+      <td class="fw-semibold">{{ d.filename }}</td>
+      <td>{{ (d.service_line or '—').replace('_',' ') | title }}</td>
+      <td>
+        <span class="badge rounded-pill bg-{{ 'primary' if d.side == 'supplier' else 'success' }}">
+          {{ d.side or '—' }}
+        </span>
+      </td>
+      <td><span class="badge bg-secondary">{{ d.status }}</span></td>
+      <td class="text-muted small">{{ d.uploaded_at[:10] if d.uploaded_at else '—' }}</td>
+      <td><a href="/contracts/{{ d.doc_id }}" class="btn btn-sm btn-outline-secondary">View</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card text-center p-5 text-muted">
+  <i class="bi bi-inbox display-4 mb-2"></i>
+  <p>No contracts yet. <a href="/upload">Upload your first one →</a></p>
+</div>
+{% endif %}
+{% endblock %}
