@@ -3,10 +3,12 @@
 **Scope:** Prototype for playbook-grounded contract triage. Covers ingestion (DOCX/PDF), **playbook bootstrapping from a company's existing contracts**, retrieval over company knowledge, clause extraction & comparison, explainable redline generation, the attorney review queue, and the audit-trail schema. Email ingestion and advanced ML calibration are explicitly scoped to later versions — see §16 Roadmap.
 
 **Design tenets (non-negotiable):**
-1. **Clear architecture, minimal code.** Every stage is a small, single-responsibility class with typed inputs and outputs. We buy the hard parts (OCR, layout, embeddings, retrieval, Word I/O) off the shelf and write only the glue and the legal logic.
-2. **Modular and readable.** Named classes with explicit attributes and methods, one concern each. A reviewer can trace one clause from bytes to redline in a single sitting, and swap any stage without touching the others.
-3. **Typed everywhere.** All data models are **Pydantic** models — they *are* the contract between modules, validated at every boundary.
-4. **Supervised architecture.** **Sentrux** runs as the architecture-quality gate over module boundaries, so the structure stays clean as the code grows.
+1. **Python only.** One language, end to end — pipeline, API, and UI. No JavaScript, no TypeScript, no separate frontend build step.
+2. **Single-file UI.** The entire web interface lives in `app.py` (Flask). Simple routes, Jinja2 templates. A reviewer can read the whole UI in one sitting.
+3. **Clear architecture, minimal code.** Every stage is a small, single-responsibility class with typed inputs and outputs. We buy the hard parts (OCR, layout, embeddings, retrieval, Word I/O) off the shelf and write only the glue and the legal logic.
+4. **Modular and readable.** Named classes with explicit attributes and methods, one concern each. A reviewer can trace one clause from bytes to redline in a single sitting, and swap any stage without touching the others.
+5. **Typed everywhere.** All data models are **Pydantic** models — they *are* the contract between modules, validated at every boundary.
+6. **Supervised architecture.** **Sentrux** runs as the architecture-quality gate over module boundaries, so the structure stays clean as the code grows.
 
 ---
 
@@ -43,6 +45,8 @@ We write glue and legal logic; everything hard is delegated.
 
 | Concern | Component | Why |
 |---|---|---|
+| **Language** | **Python (only)** | One language end to end — pipeline, UI, and tooling. No JS/TS build step. |
+| **UI** | **Flask + Jinja2** (single file: `app.py`) | Minimal, readable. Routes + templates in one place; no frontend framework. |
 | Data models & validation | **Pydantic** | One typed contract per module boundary; validation is free. |
 | Architecture-quality supervision | **Sentrux** | Structural/fitness checks over module boundaries — keeps the layering honest as code grows. |
 | PDF/scanned OCR + layout + offsets | **LandingAI ADE** (`ade-python`) | Agentic extraction with source grounding; no reinventing OCR. |
