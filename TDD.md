@@ -18,18 +18,19 @@ Two flows share the same spine (`ingest → chunk → classify`):
 
 ```
  A) ONBOARDING — build the playbook the owner never wrote down
- existing contracts (bulk) ─► INGEST ─► CHUNK ─► CLASSIFY ─► AGGREGATE by type
-                                                          ─► INFER positions
-                                                          ─► Playbook v0.1 (draft)
-                                                          ─► owner edits (manual / ask-AI) ─► save (versioned)
+ existing contracts (bulk) ─► INGEST ─► CHUNK ─► CLASSIFY
+                          ─► CLUSTER by (side, service line)          # matrix ROWS
+                          ─► for each row × policy: INFER position     # matrix CELLS
+                          ─► Playbook v0.1 = service × policy matrix (draft)
+                          ─► owner edits cells · renames/adds/deletes rows & cols ─► save (versioned)
 
  B) RUNTIME — triage one inbound contract against that playbook
                     ┌──────── company knowledge (retrieval) ────────┐
                     │  playbook.yaml · past contracts · fallbacks    │
                     └───────────────────────┬────────────────────────┘
                                             │ (lane two only)
- upload ─► INGEST ─► CHUNK ─► CLASSIFY ─► BRANCH ─► ROUTE ─► REDLINE + SUMMARY ─► AUDIT
- (docx/pdf)        (structural)(1 LLM call)  │      (queue)  (.docx + plain-language) (append-only)
+ upload ─► INGEST ─► SEGMENT ─► CHUNK ─► CLASSIFY ─► BRANCH ─► ROUTE ─► REDLINE + SUMMARY ─► AUDIT
+ (docx/pdf)        (side+service)(struct.) (1 call)   │      (queue)  (.docx + plain-language) (append-only)
                                              ├─ Verdict  → auto-clear + redline
                                              ├─ Silence  → attorney (missing clause)
                                              └─ Abstain  → attorney (insufficient grounding)
@@ -66,9 +67,10 @@ We write glue and legal logic; everything hard is delegated.
 | Ingest | `Ingestor` | `ingest(bytes, source_type) -> Document` |
 | Chunk | `Chunker` | `chunk(doc: Document) -> list[Clause]` |
 | Classify | `Classifier` | `classify(clause: Clause) -> Classification` |
+| Segment | `Segmenter` | `segment(doc: Document) -> Segment` (doc-level: side + service line) |
 | Playbook build | `PlaybookBuilder` | `build(contracts: list[Document]) -> Playbook` |
 | Playbook edit | `PlaybookEditor` | `edit_manual(...)`, `edit_with_ai(prompt) -> Playbook`, `save() -> version` |
-| Branch | `Triage` | `decide(clause, classification, playbook) -> ClauseVerdict` |
+| Branch | `Triage` | `decide(clause, classification, segment, playbook) -> ClauseVerdict` |
 | Retrieval | `KnowledgeIndex` | `search(query) -> list[Passage]` (ContextHub-backed) |
 | Redline | `Redliner` | `redline(doc, verdicts) -> DocxRef` |
 | Route | `Router` | `route(verdicts) -> QueueItem` |
@@ -108,22 +110,37 @@ class Classification(BaseModel):
     confidence: float
     spans: list[tuple[int, int]]
 
-class PlaybookRule(BaseModel):
-    id: str                   # e.g. "LL-1"
+class Segment(BaseModel):            # which matrix ROW an inbound contract belongs to
+    side: str                        # supplier (we buy) | customer (we sell)
+    service_line: str                # matches a ServiceLine.id, e.g. "fuel_cards"
+    confidence: float
+
+class Position(BaseModel):           # one matrix CELL = one citable rule
+    id: str                          # stable ID for citations, e.g. "PD-FUEL-1"
     preferred: str
     fallback: str
     walk_away: str
+    risk_weight: int | None = None   # overrides the column default when set
+    source_doc_ids: list[str] = []   # provenance: contracts this cell was inferred from
 
-class PlaybookClauseType(BaseModel):
-    required: bool
-    risk_weight: int          # missed high-weight clause >> false flag
-    rules: list[PlaybookRule]
+class PolicyColumn(BaseModel):       # a COLUMN of the matrix
+    id: str                          # "payment_deferral"
+    label: str
+    clause_type: str                 # links to the runtime clause taxonomy (§5)
+    required: bool = False
+    risk_weight: int = 3             # column default; a cell may override
     cuad_map: str | None = None
-    source_doc_ids: list[str] = []   # provenance: which contracts this was inferred from
+
+class ServiceLine(BaseModel):        # a ROW of the matrix
+    id: str                          # "fuel_cards"
+    label: str
+    side: str                        # supplier | customer
+    positions: dict[str, Position]   # keyed by PolicyColumn.id; missing key = gap
 
 class Playbook(BaseModel):
     version: str
-    clause_types: dict[str, PlaybookClauseType]
+    policies: list[PolicyColumn]     # columns, shared across all rows
+    service_lines: list[ServiceLine] # rows
 
 class ClauseVerdict(BaseModel):
     clause_id: str
@@ -158,75 +175,124 @@ No fixed-size windows. Segment by the document's own structure (article → clau
 
 ## 5. Classify — the spine decision
 
-One cheap LLM call per clause: temperature 0, structured output, confidence. Labels come from the **playbook taxonomy (12–20 wedge types)**, not CUAD's 41 (CUAD is an eval yardstick only, §13). Matching a clause to its rules is then a **deterministic lookup** — `playbook.clause_types[clause_type].rules` — no similarity math on the primary path. That lookup is what makes the whole system explainable ("§7.2 → Limitation of Liability → rule `LL-1`").
+One cheap LLM call per clause: temperature 0, structured output, confidence. Labels come from the **playbook taxonomy (12–20 wedge types)**, not CUAD's 41 (CUAD is an eval yardstick only, §13). Matching is then a **two-axis deterministic lookup**: the document's **segment** (side + service line, §5.1) selects the matrix **row**, the clause's `clause_type` selects the **column**, and the cell is the applicable position — `playbook[segment][clause_type]`. No similarity math on the primary path. That lookup is what makes the whole system explainable ("§7.2 → Fuel cards ▸ Payment deferral → rule `PD-FUEL-1`").
 
-**The wedge taxonomy (12–20 types, playbook-defined):** limitation of liability · indemnification · term & termination · confidentiality scope · IP ownership · payment terms · governing law & jurisdiction · auto-renewal · data protection / DPA · assignment & change of control · warranties & disclaimers · dispute resolution · insurance · non-solicitation. These are the exact labels the classifier emits and the keys of `Playbook.clause_types`; CUAD's 41 categories are mapped in only where they overlap, purely for benchmark reporting (§13).
+**The wedge taxonomy (12–20 types, playbook-defined):** limitation of liability · indemnification · term & termination · confidentiality scope · IP ownership · payment terms · governing law & jurisdiction · auto-renewal · data protection / DPA · assignment & change of control · warranties & disclaimers · dispute resolution · insurance · non-solicitation. These are the exact labels the classifier emits and the **policy columns** of the playbook matrix (§6); CUAD's 41 categories are mapped in only where they overlap, purely for benchmark reporting (§13).
+
+### 5.1 Segmentation — pick the matrix row
+
+Because the playbook is a matrix (§6), triage first has to know **which row** an inbound contract belongs to. `Segmenter.segment(doc)` makes one document-level LLM call returning a `Segment`: the **side** (are we buyer or seller?) and the **service line** (fuel cards, tyres, vehicle lease, freight…), with a confidence. The segment selects the matrix **row**; per-clause classification then selects the **column** — together they pick the cell.
+
+If the segment is low-confidence, or the service line isn't in the matrix yet, triage **abstains** and routes to the attorney, surfacing the unknown service line as a **candidate new row** for the owner to confirm. A new service line never receives a silent, ungrounded verdict.
 
 ---
 
-## 6. Playbook Bootstrap — build v0.1 from existing contracts (new module)
+## 6. Playbook Bootstrap — build the service × policy matrix from existing contracts
 
-**The problem owners told us:** *"We don't have a playbook — it's in our heads."* So we reconstruct it from the contracts they've already signed.
+**The problem owners told us:** *"We don't have a playbook — it's in our heads."* And their standards are not one-size-fits-all: a trucking company runs **15-day terms on fuel but 60-day terms on a vehicle lease**, and its *supplier* paper looks nothing like its *customer* paper. A single flat list of positions blurs all of that together. So the playbook is a **matrix** — rows = service lines (each tagged supplier or customer), columns = policies, every cell = the position that actually applies:
 
-`PlaybookBuilder.build(contracts)` reuses the shared spine, then aggregates:
+| Service line ▸ Policy | Payment deferral | Liability cap | … |
+|---|---|---|---|
+| **Fuel cards** *(supplier)* | 30 days EOM | 12 mo fees | … |
+| **Tyres** *(supplier)* | 60 days from invoice | … | … |
+| **Freight** *(customer)* | 15 days EOM | … | … |
+
+`PlaybookBuilder.build(contracts)` reuses the shared spine, then fills the matrix in two passes:
 
 ```
-bulk contracts ─► ingest ─► chunk ─► classify        # reuse §3–5 unchanged
-              ─► group clauses by clause_type
-              ─► for each type: infer preferred / fallback / walk-away
-                 · preferred  = the company's most common (modal) position
-                 · fallback   = the observed range across their contracts
-                 · walk_away  = positions they've never accepted / clear outliers
-                 · risk_weight = default by type, editable
-                 · source_doc_ids = provenance (grounds every inferred rule)
-              ─► Playbook v0.1 (draft, versioned)
+bulk contracts ─► ingest ─► chunk ─► classify              # reuse §3–5 unchanged
+   PASS 1 ─► CLUSTER each contract into a (side, service_line) row
+             · side         = are we buyer or seller?  (parties + who owes what)
+             · service_line = which product/service?   (subject, titles, defined terms)
+   PASS 2 ─► for each row × policy column, INFER the cell
+             · preferred   = the modal position in that cluster
+             · fallback    = the observed range across those contracts
+             · walk_away   = positions never accepted / clear outliers
+             · source_doc_ids = provenance for that specific cell
+          ─► Playbook v0.1 = a filled matrix (draft, versioned)
 ```
 
-The LLM only **summarizes each cluster into a position statement**; the clustering and frequency are deterministic, and every inferred rule cites the `source_doc_ids` it came from — so even the bootstrapped playbook is grounded, not invented.
+The LLM does only summarization — naming each cluster and turning a cell's observed positions into a statement — while the **clustering counts and frequencies stay deterministic**, and **every cell cites the `source_doc_ids` it came from.** A service line with no observed position for a policy is left **blank, not guessed**.
 
-**Owner editing (`PlaybookEditor`) — two modes, both end in an explicit save:**
-- **Manual:** edit any `preferred` / `fallback` / `walk_away` / `risk_weight` / `required` field directly (validated by the Pydantic model).
-- **Ask-AI:** natural-language request (e.g. *"we never accept liability caps under 12 months"*) → a smolagents loop proposes a rule diff → owner approves → applied.
+**Owner editing (`PlaybookEditor`) — the whole matrix is editable; every change ends in an explicit save:**
+- **Cells:** edit any `preferred` / `fallback` / `walk_away` / `risk_weight` / `required`.
+- **Rows & columns:** rename, add, or delete service lines (rows) and policies (columns) — e.g. split "fuel" into "fuel cards" and "bulk diesel," or add a "data protection" column.
+- **Ask-AI:** natural-language request (e.g. *"we never accept liability caps under 12 months on customer freight"*) → a smolagents loop proposes a matrix diff → owner approves → applied.
 - **Save:** bumps `Playbook.version`; the change is written to the audit log (§12).
 
-We still **ship a pre-built NDA + vendor default** so a brand-new company with zero contracts to learn from starts grounded; bootstrap refines it from their actual paper.
+We still **ship a pre-built NDA + vendor default** (a small starter matrix) so a brand-new company with zero contracts starts grounded; bootstrap refines it from their actual paper.
 
 ---
 
-## 7. Playbook storage schema
+## 7. Playbook storage schema — the matrix as YAML
 
-Persisted as versioned, diffable **YAML** that round-trips 1:1 with the `Playbook` Pydantic model.
+Persisted as versioned, diffable **YAML** that round-trips 1:1 with the `Playbook` Pydantic model: a list of policy **columns** and a list of service-line **rows**, each row holding one position per policy.
 
 ```yaml
 version: 2026-07-01.1
-clause_types:
-  limitation_of_liability:
+
+policies:                                   # COLUMNS — shared across every row
+  - id: payment_deferral
+    label: "Payment deferral"
+    clause_type: payment_terms
+    required: true
+    risk_weight: 4
+    cuad_map: "Payment Terms"
+  - id: limitation_of_liability
+    label: "Limitation of liability"
+    clause_type: limitation_of_liability
     required: true
     risk_weight: 5
     cuad_map: "Cap On Liability"
-    source_doc_ids: ["c_0192", "c_0207", "c_0233"]   # inferred from these contracts
-    rules:
-      - id: LL-1
-        preferred: "Cap = 12 months' fees; carve-outs for IP/confidentiality/indemnity."
-        fallback:  "Cap between 12–24 months' fees."
-        walk_away: "Uncapped liability, or cap below 12 months."
+
+service_lines:                              # ROWS — each tagged with the side we're on
+  - id: fuel_cards
+    label: "Fuel cards"
+    side: supplier                          # we BUY fuel cards from a supplier
+    positions:
+      payment_deferral:
+        id: PD-FUEL-1
+        preferred: "30 days EOM"
+        fallback:  "15–45 days EOM"
+        walk_away: "Payment on receipt / prepayment"
+        source_doc_ids: ["c_0192", "c_0207"]
+  - id: tyres
+    label: "Tyres"
+    side: supplier
+    positions:
+      payment_deferral:
+        id: PD-TYRE-1
+        preferred: "60 days from invoice received"
+        fallback:  "45–75 days from invoice"
+        walk_away: "Under 30 days"
+        source_doc_ids: ["c_0233"]
+  - id: freight_services
+    label: "Freight services"
+    side: customer                          # we SELL freight to our customers
+    positions:
+      payment_deferral:
+        id: PD-FRT-1
+        preferred: "15 days EOM"
+        fallback:  "30 days EOM"
+        walk_away: "Over 45 days"
+        source_doc_ids: ["c_0301", "c_0305"]
 ```
 
-Editing a rule is a one-line diff with a version bump — the entire grounding source stays human-checkable.
+Editing a cell — or renaming, adding, or deleting a row or column — is a small, reviewable YAML diff with a version bump, so the entire grounding source stays human-checkable. A blank cell (no position for that service × policy) is an explicit gap, not a guess.
 
 ---
 
 ## 8. Branch — the three-way product decision
 
-`Triage.decide(...)` is a pure function over a classification plus a coverage check against the playbook's required types. Exactly one branch fires.
+`Triage.decide(...)` is a pure function over a classification, the document's **segment** (which selects the matrix row, §5.1), and a coverage check against that row's required policies. Exactly one branch fires.
 
 | Branch | Trigger | Output (`ClauseVerdict`) |
 |---|---|---|
-| **Verdict** | Classified, rules matched | `complies` / `acceptable_deviation` / `unacceptable` / `unusual` + cited spans + rule IDs + rationale |
-| **Silence** | A required type has zero hits across the doc | "Contract is silent on X; playbook requires X" |
-| **Abstain** | Low confidence, taxonomy no-fit, or lane disagreement | "Insufficient grounding" + reason → attorney |
+| **Verdict** | Classified, matrix cell matched | `complies` / `acceptable_deviation` / `unacceptable` / `unusual` + cited spans + rule IDs + rationale |
+| **Silence** | A policy the matrix marks required *for this row* has zero clause hits | "Contract is silent on X; the playbook requires X for this service line" |
+| **Abstain** | Low confidence, taxonomy no-fit, **unknown segment** (new service line not in the matrix), or lane disagreement | "Insufficient grounding" + reason → attorney; unknown service lines are flagged as candidate new rows |
 
-**Abstention is the anti-wrapper proof** — a wrapper always answers; Syntra visibly declines and explains why. One LLM judgment call per clause with that clause's rules bundled (preferred/fallback/walk-away in a single prompt).
+**Abstention is the anti-wrapper proof** — a wrapper always answers; Syntra visibly declines and explains why. One LLM judgment call per clause with the matched cell's position bundled (preferred/fallback/walk-away in a single prompt).
 
 ### 8.1 Lane two — semantic safety net (live in v1)
 
@@ -378,7 +444,7 @@ Role is stored in the Flask session. No user creation flow exists in the prototy
 | `/upload` — upload a contract | ✅ | ❌ |
 | `/contracts` — list of uploaded contracts + status | ✅ | ❌ |
 | `/contracts/<id>` — triage result, redline, risk summary | ✅ (read) | ❌ |
-| `/playbook` — view + edit playbook (manual or ask-AI) | ✅ | ❌ |
+| `/playbook` — view + edit the service × policy matrix (cells, rows, columns; manual or ask-AI) | ✅ | ❌ |
 | `/queue` — attorney review queue with pre-built briefs | ❌ | ✅ |
 | `/queue/<id>/review` — approve / reject / promote to fallback | ❌ | ✅ |
 | `/audit` — append-only event log view | ✅ (own docs) | ✅ (all) |
@@ -404,7 +470,7 @@ App shutdown/export:  SQLite    ──► database.py ──► seed.json  (via 
 
 | Table | Key columns | Populated by |
 |---|---|---|
-| `documents` | `doc_id`, `source_type`, `status`, `uploaded_by`, `uploaded_at` | `Ingestor` |
+| `documents` | `doc_id`, `source_type`, `status`, `side`, `service_line`, `uploaded_by`, `uploaded_at` | `Ingestor` + `Segmenter` |
 | `clauses` | `clause_id`, `doc_id`, `text`, `start`, `end`, `heading_path` | `Chunker` |
 | `classifications` | `clause_id`, `clause_type`, `confidence`, `spans` | `Classifier` |
 | `verdicts` | `clause_id`, `branch`, `status`, `rule_ids`, `rationale` | `Triage` |
@@ -439,17 +505,18 @@ syntra/
 ├── app.py                   ← Flask app: ALL routes + Jinja2 templates (single file, ~200 lines)
 │
 ├── models.py                ← All Pydantic models: Document, Clause, Classification,
-│                              ClauseVerdict, Playbook, PlaybookRule, QueueItem,
-│                              AuditEvent, Citation  (§2)
+│                              Segment, ClauseVerdict, Playbook (PolicyColumn ·
+│                              ServiceLine · Position), QueueItem, AuditEvent, Citation  (§2)
 │
 ├── database.py              ← SQLite setup · seed_from_file() · dump_to_file()
 ├── seed.json                ← Canonical durable store (committed to repo)
 │
 ├── pipeline/
 │   ├── ingestor.py          ← Ingestor   — PDF (ADE) + DOCX (python-docx) → Document
+│   ├── segmenter.py         ← Segmenter  — Document → Segment  (doc-level: side + service line)
 │   ├── chunker.py           ← Chunker    — Document → list[Clause]
 │   ├── classifier.py        ← Classifier — Clause → Classification  (1 LLM call, temp 0)
-│   ├── triage.py            ← Triage     — Classification + Playbook → ClauseVerdict
+│   ├── triage.py            ← Triage     — Classification + Segment + Playbook → ClauseVerdict
 │   ├── redliner.py          ← Redliner   — ClauseVerdict[] → tracked-changes .docx
 │   └── router.py            ← Router     — ClauseVerdict[] → QueueItem
 │
@@ -459,7 +526,7 @@ syntra/
 │                              (runs only on low-confidence / no-fit clauses)
 │
 ├── playbook/
-│   ├── builder.py           ← PlaybookBuilder — infer Playbook v0.1 from existing contracts
+│   ├── builder.py           ← PlaybookBuilder — cluster contracts → infer service × policy matrix
 │   ├── editor.py            ← PlaybookEditor  — manual edit + ask-AI (smolagents) + save
 │   └── default.yaml         ← Pre-built NDA + vendor playbook (used if no contracts exist yet)
 │
