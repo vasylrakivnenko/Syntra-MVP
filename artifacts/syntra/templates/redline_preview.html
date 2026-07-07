@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Redline Preview — {{ doc.filename }} — Syntra{% endblock %}
+
+{% block content %}
+
+{# ── header ── #}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h3 class="fw-bold mb-0">
+      <i class="bi bi-pencil-square me-2 text-danger"></i>Redline Preview
+    </h3>
+    <small class="text-muted">
+      {{ doc.filename }}
+      &nbsp;·&nbsp;{{ (doc.service_line or '—').replace('_',' ') | title }}
+      &nbsp;·&nbsp;{{ doc.side or '—' }}
+    </small>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="/contracts/{{ doc.doc_id }}/download" class="btn btn-outline-success btn-sm">
+      <i class="bi bi-file-earmark-word me-1"></i>Download .docx
+    </a>
+    <a href="/contracts/{{ doc.doc_id }}" class="btn btn-outline-secondary btn-sm">
+      ← Back to analysis
+    </a>
+  </div>
+</div>
+
+{# ── legend ── #}
+<div class="d-flex gap-3 mb-4 align-items-center flex-wrap">
+  <small class="fw-semibold text-muted text-uppercase" style="letter-spacing:.06em;">Legend</small>
+  <span class="badge border" style="background:#fff8f8;color:#842029;border-color:#f5c2c7 !important;font-weight:400;font-size:.8rem;">
+    <s>Original text</s>
+  </span>
+  <span class="badge border" style="background:#f0fff4;color:#155724;border-color:#c3e6cb !important;font-weight:400;font-size:.8rem;">
+    ✦ Suggested replacement
+  </span>
+  <span class="badge bg-success bg-opacity-10 text-success border border-success-subtle" style="font-weight:400;font-size:.8rem;">
+    ✓ Complies — no change
+  </span>
+  <span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary-subtle" style="font-weight:400;font-size:.8rem;">
+    — Abstained / no coverage
+  </span>
+</div>
+
+{# ── stats ── #}
+{% set changed = verdicts | selectattr('suggested_text') | list %}
+<div class="alert alert-dark py-2 mb-4 d-flex gap-4 align-items-center flex-wrap">
+  <span><strong>{{ verdicts | length }}</strong> clauses</span>
+  <span class="text-danger"><strong>{{ changed | length }}</strong> with suggested changes</span>
+  <span class="text-success"><strong>{{ verdicts | selectattr('status','equalto','complies') | list | length }}</strong> compliant</span>
+  <span class="text-muted"><strong>{{ verdicts | selectattr('branch','equalto','abstain') | list | length }}</strong> abstained</span>
+</div>
+
+{# ── clause-by-clause redline ── #}
+<div class="d-flex flex-column gap-3">
+{% for v in verdicts %}
+{% set has_change = v.suggested_text and v.suggested_text | trim %}
+
+<div class="card">
+  {# clause header bar #}
+  <div class="card-header py-2 px-3 d-flex justify-content-between align-items-center"
+       style="background:{% if v.status == 'unacceptable' %}#fff0f0{% elif v.status == 'acceptable_deviation' %}#fff8f0{% elif v.status == 'complies' %}#f0fff4{% else %}#f8f9fa{% endif %};">
+    <div class="d-flex align-items-center gap-2">
+      <span class="badge
+        {% if v.status == 'unacceptable' %}bg-danger
+        {% elif v.status == 'acceptable_deviation' %}bg-warning text-dark
+        {% elif v.status == 'complies' %}bg-success
+        {% elif v.branch == 'silence' %}bg-danger
+        {% else %}bg-secondary{% endif %}">
+        {{ (v.status or v.branch or 'abstain').replace('_',' ').upper() }}
+      </span>
+      <span class="small fw-semibold text-muted">
+        {{ (v.clause_type or '').replace('_',' ') | title }}
+      </span>
+    </div>
+    {% if v.rule_ids %}
+    <small class="text-muted">Rule: <code>{{ v.rule_ids | join(', ') }}</code></small>
+    {% endif %}
+  </div>
+
+  <div class="card-body px-3 py-3" style="font-family:'Georgia',serif;font-size:.93rem;line-height:1.75;">
+
+    {% if has_change %}
+      {# ── DELETED (original) ── #}
+      <div class="mb-2 p-2 rounded" style="background:#fff8f8;border-left:3px solid #dc3545;">
+        <small class="text-danger text-uppercase fw-semibold" style="letter-spacing:.05em;font-family:sans-serif;">
+          <i class="bi bi-dash-circle me-1"></i>Current
+        </small>
+        <p class="mb-0 mt-1" style="color:#6b2020;text-decoration:line-through;text-decoration-color:#dc3545cc;">
+          {{ v.clause_text or '' }}
+        </p>
+      </div>
+
+      {# ── INSERTED (suggested) ── #}
+      <div class="p-2 rounded" style="background:#f0fff4;border-left:3px solid #198754;">
+        <small class="text-success text-uppercase fw-semibold" style="letter-spacing:.05em;font-family:sans-serif;">
+          <i class="bi bi-plus-circle me-1"></i>Suggested
+        </small>
+        <p class="mb-0 mt-1" style="color:#155724;">
+          {{ v.suggested_text }}
+        </p>
+      </div>
+
+      {% if v.rationale %}
+      <p class="mt-2 mb-0 small text-muted fst-italic">
+        <i class="bi bi-quote me-1"></i>{{ v.rationale }}
+      </p>
+      {% endif %}
+
+    {% elif v.branch == 'abstain' or v.status is none %}
+      {# ── UNCHANGED (abstain/no coverage) ── #}
+      <p class="mb-0 text-muted" style="opacity:.7;">{{ v.clause_text or '' }}</p>
+      {% if v.reason %}
+      <small class="text-muted fst-italic mt-1 d-block" style="font-family:sans-serif;">
+        {{ v.reason }}
+      </small>
+      {% endif %}
+
+    {% else %}
+      {# ── COMPLIES / deviates but no suggested text ── #}
+      <p class="mb-0">{{ v.clause_text or '' }}</p>
+      {% if v.rationale %}
+      <p class="mt-2 mb-0 small text-muted fst-italic">
+        <i class="bi bi-quote me-1"></i>{{ v.rationale }}
+      </p>
+      {% endif %}
+    {% endif %}
+
+  </div>
+</div>
+{% endfor %}
+</div>
+
+<div class="mt-4 mb-5 text-center">
+  <a href="/contracts/{{ doc.doc_id }}" class="btn btn-outline-secondary me-2">
+    ← Back to analysis
+  </a>
+  <a href="/contracts/{{ doc.doc_id }}/download" class="btn btn-success">
+    <i class="bi bi-file-earmark-word me-1"></i>Download .docx Redline
+  </a>
+</div>
+
+{% endblock %}

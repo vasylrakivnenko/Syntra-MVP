@@ -278,6 +278,25 @@ def contract(doc_id):
                            redline_available=redline_available, user=current_user())
 
 
+@app.route("/contracts/<doc_id>/redline-preview")
+@login_required
+def redline_preview(doc_id):
+    with get_db() as db:
+        doc = db.execute("SELECT * FROM documents WHERE doc_id=?", (doc_id,)).fetchone()
+        if not doc:
+            abort(404)
+        rows = db.execute(
+            """SELECT v.*, c.text AS clause_text, cl.clause_type
+               FROM verdicts v
+               JOIN clauses c ON v.clause_id=c.clause_id
+               JOIN classifications cl ON v.clause_id=cl.clause_id
+               WHERE v.doc_id=? ORDER BY c.start ASC""",
+            (doc_id,),
+        ).fetchall()
+    verdicts = _process_verdicts(rows)
+    return render_template("redline_preview.html", doc=doc, verdicts=verdicts, user=current_user())
+
+
 @app.route("/contracts/<doc_id>/download")
 @login_required
 def download_redline(doc_id):
