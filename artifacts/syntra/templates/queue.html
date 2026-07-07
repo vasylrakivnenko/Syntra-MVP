@@ -17,9 +17,16 @@
         &nbsp;·&nbsp;Priority score: <strong>{{ item.priority }}</strong>
       </small>
     </div>
-    <a href="/queue/{{ item.item_id }}/review" class="btn btn-primary btn-sm">
-      <i class="bi bi-pencil-square me-1"></i>Review
-    </a>
+    <div class="d-flex gap-2">
+      <a href="/contracts/{{ item.doc_id }}" class="btn btn-outline-secondary btn-sm">View analysis</a>
+      {% if user.role == 'attorney' %}
+      <a href="/queue/{{ item.item_id }}/review" class="btn btn-primary btn-sm">
+        <i class="bi bi-pencil-square me-1"></i>Review
+      </a>
+      {% else %}
+      <span class="badge bg-warning text-dark align-self-center">Awaiting attorney</span>
+      {% endif %}
+    </div>
   </div>
 </div>
 {% endfor %}

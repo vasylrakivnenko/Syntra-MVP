@@ -20,8 +20,10 @@
   </div>
   <div class="col-sm-4">
     <div class="card text-center p-3 border-warning">
-      <div class="display-5 fw-bold text-warning">{{ pending }}</div>
-      <div class="text-muted small">Pending attorney review</div>
+      <a href="/queue" class="text-decoration-none">
+        <div class="display-5 fw-bold text-warning">{{ pending }}</div>
+        <div class="text-muted small">Pending attorney review — view queue →</div>
+      </a>
     </div>
   </div>
   <div class="col-sm-4">
@@ -54,7 +56,21 @@
           {{ d.side or '—' }}
         </span>
       </td>
-      <td><span class="badge bg-secondary">{{ d.status }}</span></td>
+      <td>
+        {% if d.status == 'error' %}
+        <span class="badge bg-danger">Error</span>
+        {% elif d.status != 'processed' %}
+        <span class="badge bg-secondary">{{ d.status | title }}</span>
+        {% elif d.review_status == 'pending' %}
+        <a href="/queue" class="text-decoration-none"><span class="badge bg-warning text-dark"><i class="bi bi-person-exclamation me-1"></i>Attorney review</span></a>
+        {% elif d.review_status == 'approved' %}
+        <span class="badge bg-success"><i class="bi bi-check2-circle me-1"></i>Approved</span>
+        {% elif d.review_status == 'rejected' %}
+        <span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>Rejected</span>
+        {% else %}
+        <span class="badge bg-success"><i class="bi bi-check2-circle me-1"></i>Good to go</span>
+        {% endif %}
+      </td>
       <td class="text-muted small">{{ d.uploaded_at[:10] if d.uploaded_at else '—' }}</td>
       <td><a href="/contracts/{{ d.doc_id }}" class="btn btn-sm btn-outline-secondary">View</a></td>
     </tr>

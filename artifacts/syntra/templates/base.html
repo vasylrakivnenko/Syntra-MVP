@@ -28,9 +28,7 @@
       <a class="nav-link text-white-50" href="/contracts"><i class="bi bi-file-text"></i> Contracts</a>
       <a class="nav-link text-white-50" href="/upload"><i class="bi bi-upload"></i> Upload</a>
       <a class="nav-link text-white-50" href="/playbook"><i class="bi bi-table"></i> Playbook</a>
-      {% if user.role == 'attorney' %}
       <a class="nav-link text-white-50" href="/queue"><i class="bi bi-list-check"></i> Queue</a>
-      {% endif %}
       <a class="nav-link text-white-50" href="/audit"><i class="bi bi-journal-check"></i> Audit</a>
       <span class="text-secondary small ms-2">{{ user.username }} · {{ user.role }}</span>
       <a class="nav-link text-white-50" href="/logout">Sign out</a>

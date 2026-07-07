@@ -127,6 +127,8 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
         db.executemany("INSERT OR REPLACE INTO clauses VALUES (?,?,?,?,?,?)", clause_rows)
         db.executemany("INSERT OR REPLACE INTO classifications VALUES (?,?,?,?)", clf_rows)
         db.executemany("INSERT OR REPLACE INTO verdicts VALUES (?,?,?,?,?,?,?,?,?,?)", verdict_rows)
+        # Reprocessing must not leave stale pending queue items behind.
+        db.execute("DELETE FROM queue_items WHERE doc_id=? AND status='pending'", (doc_id,))
         for qi in queue_items:
             db.execute(
                 "INSERT OR REPLACE INTO queue_items VALUES (?,?,?,?,?,?,?)",
@@ -158,7 +160,11 @@ def _run_pipeline_bg(doc_id: str, path: Path, source_type: str, filename: str, u
 @login_required
 def index():
     with get_db() as db:
-        docs = db.execute("SELECT * FROM documents ORDER BY uploaded_at DESC LIMIT 10").fetchall()
+        docs = db.execute(
+            """SELECT d.*, (SELECT q.status FROM queue_items q
+                            WHERE q.doc_id = d.doc_id ORDER BY q.rowid DESC LIMIT 1) AS review_status
+               FROM documents d ORDER BY d.uploaded_at DESC LIMIT 10"""
+        ).fetchall()
         pending = db.execute("SELECT COUNT(*) FROM queue_items WHERE status='pending'").fetchone()[0]
     return render_template("index.html", docs=docs, pending=pending, user=current_user())
 
@@ -253,7 +259,11 @@ def job_status(doc_id):
 @login_required
 def contracts():
     with get_db() as db:
-        docs = db.execute("SELECT * FROM documents ORDER BY uploaded_at DESC").fetchall()
+        docs = db.execute(
+            """SELECT d.*, (SELECT q.status FROM queue_items q
+                            WHERE q.doc_id = d.doc_id ORDER BY q.rowid DESC LIMIT 1) AS review_status
+               FROM documents d ORDER BY d.uploaded_at DESC"""
+        ).fetchall()
     return render_template("contracts.html", docs=docs, user=current_user())
 
 
@@ -273,8 +283,12 @@ def contract(doc_id):
             (doc_id,),
         ).fetchall()
     verdicts = _process_verdicts(rows)
+    with get_db() as db:
+        queue_item = db.execute(
+            "SELECT * FROM queue_items WHERE doc_id=? ORDER BY rowid DESC LIMIT 1", (doc_id,)
+        ).fetchone()
     redline_available = (UPLOADS / f"{doc_id}_redline.docx").exists()
-    return render_template("contract.html", doc=doc, verdicts=verdicts,
+    return render_template("contract.html", doc=doc, verdicts=verdicts, queue_item=queue_item,
                            redline_available=redline_available, user=current_user())
 
 
@@ -377,6 +391,8 @@ def review(item_id):
             abort(404)
         if request.method == "POST":
             decision = request.form.get("decision", "rejected")
+            if decision not in ("approved", "rejected"):
+                decision = "rejected"
             notes = request.form.get("notes", "")
             db.execute(
                 "UPDATE queue_items SET status=?, attorney_notes=? WHERE item_id=?",
