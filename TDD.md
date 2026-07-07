@@ -369,32 +369,46 @@ A Flask `@require_role("owner")` / `@require_role("attorney")` decorator guards 
 
 ---
 
-## 17. Data & Persistence (SQLite + seed.json)
+## 17. Data & Persistence — three layers
 
-**Why SQLite:** zero-config, file-based, ships with Python. Right-sized for a single-tenant prototype. No separate DB server to manage or deploy.
+Storage is split by the nature of each artifact, not by convenience. Each layer has exactly one home.
 
-**Why `seed.json`:** Replit's ephemeral container means the SQLite file can be wiped on redeploy. `seed.json` is the durable store committed to the repo. The lifecycle is:
+**Layer 1 — Playbook → YAML in git (`playbook/default.yaml`)**
+The playbook is the grounding source of truth. It lives as a YAML file committed to the repo: versioning is git history, diffs are human-readable, and any attorney or operator can edit it in a text editor. Putting it in a database would destroy its best property — traceability. When `PlaybookEditor` saves a change, it writes a new YAML file and bumps the `version` field; the old version is preserved in git history automatically.
+
+**Layer 2 — Contracts + derived artifacts → SQLite tables + files on disk**
+Everything the pipeline produces from an uploaded contract is stored in SQLite and the local filesystem. The SQLite file is the working store; `seed.json` (committed to the repo) is its durable twin so a fresh deploy starts with real demo data.
 
 ```
-App startup:   seed.json ──► database.py ──► SQLite (working store)
-App shutdown / export:  SQLite ──► database.py ──► seed.json (written back to disk)
+App startup:          seed.json ──► database.py ──► SQLite
+App shutdown/export:  SQLite    ──► database.py ──► seed.json  (via /admin/export)
 ```
 
-`database.py` owns both directions — `seed_from_file()` and `dump_to_file()` — and is called from `app.py`'s startup and a `/admin/export` route.
-
-**Tables (mirrors the Pydantic models in §2):**
-
-| Table | Key columns | Notes |
+| Table | Key columns | Populated by |
 |---|---|---|
-| `documents` | `doc_id`, `source_type`, `status`, `uploaded_by`, `uploaded_at` | Metadata only; full text stored as a file ref |
-| `clauses` | `clause_id`, `doc_id`, `text`, `start`, `end`, `heading_path` | Populated by `Chunker` |
-| `classifications` | `clause_id`, `clause_type`, `confidence`, `spans` | Populated by `Classifier` |
-| `verdicts` | `clause_id`, `branch`, `status`, `rule_ids`, `rationale` | Populated by `Triage` |
-| `queue_items` | `item_id`, `doc_id`, `priority`, `assignee`, `status` | Populated by `Router` |
-| `playbook_rules` | `rule_id`, `clause_type`, `preferred`, `fallback`, `walk_away`, `risk_weight`, `version` | Editable; version-bumped on every save |
-| `audit_events` | `id`, `timestamp`, `actor`, `stage`, `input_hash`, `prompt_hash`, `output_json`, `prev_hash` | Append-only; `prev_hash` enforced in `AuditLog.append()` |
+| `documents` | `doc_id`, `source_type`, `status`, `uploaded_by`, `uploaded_at` | `Ingestor` |
+| `clauses` | `clause_id`, `doc_id`, `text`, `start`, `end`, `heading_path` | `Chunker` |
+| `classifications` | `clause_id`, `clause_type`, `confidence`, `spans` | `Classifier` |
+| `verdicts` | `clause_id`, `branch`, `status`, `rule_ids`, `rationale` | `Triage` |
+| `queue_items` | `item_id`, `doc_id`, `priority`, `assignee`, `status` | `Router` |
 
-`seed.json` is simply a JSON dump of these tables, structured as `{ "table_name": [ ...rows ] }`. Committing it to the repo means the demo data (sample contracts, a pre-loaded playbook, a sample queue item) is always available on a fresh deploy.
+Parsed document text and generated `.docx` redlines are stored as files on disk; the table rows hold a `file_ref` path, not the raw bytes.
+
+**Layer 3 — Audit trail → single append-only SQLite table**
+The `audit_events` table is insert-only. There are **no `UPDATE` or `DELETE` statements anywhere in the codebase** — that discipline is enforced by `AuditLog.append()` being the only write path, and it is demonstrable in code review, which is exactly the kind of build evidence the panel verifies.
+
+| Column | Purpose |
+|---|---|
+| `id` | UUID |
+| `timestamp` | ISO 8601 |
+| `actor` | `system:classify` · `system:redline` · `owner:<id>` · `attorney:<id>` |
+| `stage` | `ingest` · `classify` · `branch` · `redline` · `route` · `playbook_edit` · `attorney_action` |
+| `model` | Model name + version, or `null` for deterministic stages |
+| `input_hash` | SHA-256 of the exact input — proves what was processed without storing sensitive text |
+| `prompt_hash` | SHA-256 of the prompt — reproducibility without storing raw prompts |
+| `output_json` | The verdict, diff, or decision |
+| `citations` | JSON array of `{ rule_id?, doc_id?, start?, end? }` |
+| `prev_hash` | SHA-256 of the previous event — chains the log, making tampering detectable |
 
 ---
 
