@@ -1,6 +1,6 @@
-# Syntra — Technical Design Document (v0.3)
+# Syntra — Technical Design Document (v0.4)
 
-**Scope:** Prototype for playbook-grounded contract triage. Covers ingestion (DOCX/PDF), **playbook bootstrapping from a company's existing contracts**, retrieval over company knowledge, clause extraction & comparison, explainable redline generation, the attorney review queue, and the audit-trail schema. Email ingestion and advanced ML calibration are explicitly scoped to later versions — see §16 Roadmap.
+**Scope:** Prototype for playbook-grounded contract triage. Covers ingestion (DOCX/PDF), **playbook bootstrapping from a company's existing contracts**, retrieval over company knowledge, clause extraction & comparison, explainable redline generation, lane-two semantic safety net, attorney feedback → playbook promotion, two-role auth (owner + attorney), the attorney review queue, and the audit-trail schema backed by SQLite with a seed.json for durable persistence. Email ingestion and advanced ML calibration are explicitly scoped to later versions — see §19 Roadmap.
 
 **Design tenets (non-negotiable):**
 1. **Python only.** One language, end to end — pipeline, API, and UI. No JavaScript, no TypeScript, no separate frontend build step.
@@ -47,6 +47,9 @@ We write glue and legal logic; everything hard is delegated.
 |---|---|---|
 | **Language** | **Python (only)** | One language end to end — pipeline, UI, and tooling. No JS/TS build step. |
 | **UI** | **Flask + Jinja2** (single file: `app.py`) | Minimal, readable. Routes + templates in one place; no frontend framework. |
+| **Auth / SSO** | **Replit Auth** (OpenID Connect + PKCE) | Native Replit sign-in — no password management; role is selected at first login and stored in session. |
+| **Database** | **SQLite** (via `sqlite3`) | Zero-config, file-based, ships with Python. Enough for a single-tenant prototype. |
+| **Seed / persistence** | `seed.json` ↔ `database.py` | Canonical data store that survives publish/unpublish cycles. On startup: load `seed.json` → seed DB. On shutdown / export: dump DB → `seed.json`. |
 | Data models & validation | **Pydantic** | One typed contract per module boundary; validation is free. |
 | Architecture-quality supervision | **Sentrux** | Structural/fitness checks over module boundaries — keeps the layering honest as code grows. |
 | PDF/scanned OCR + layout + offsets | **LandingAI ADE** (`ade-python`) | Agentic extraction with source grounding; no reinventing OCR. |
@@ -332,16 +335,117 @@ Every attorney decision is a labeled example. Once enough accumulate in the audi
 
 ---
 
-## 16. Roadmap
+## 16. Auth & Access Control
+
+**Mechanism:** Replit Auth (OpenID Connect + PKCE). No password management; the user clicks "Sign in with Replit" and is authenticated by the platform.
+
+**Two roles, one prompt:** This is a single-tenant prototype with exactly **one owner account and one attorney account** — both pre-seeded in `seed.json`. After Replit Auth confirms identity, the app presents a single role-selection screen:
+
+```
+┌─────────────────────────────────────┐
+│  Welcome to Syntra.                 │
+│  Who are you signing in as?         │
+│                                     │
+│   [ Owner / Operator ]              │
+│   [ Supervising Attorney ]          │
+└─────────────────────────────────────┘
+```
+
+Role is stored in the Flask session. No user creation flow exists in the prototype — if a third Replit identity tries to log in, they see "Access not configured." That's intentional; the demo has two seats.
+
+**What each role sees:**
+
+| Route | Owner | Attorney |
+|---|---|---|
+| `/upload` — upload a contract | ✅ | ❌ |
+| `/contracts` — list of uploaded contracts + status | ✅ | ❌ |
+| `/contracts/<id>` — triage result, redline, risk summary | ✅ (read) | ❌ |
+| `/playbook` — view + edit playbook (manual or ask-AI) | ✅ | ❌ |
+| `/queue` — attorney review queue with pre-built briefs | ❌ | ✅ |
+| `/queue/<id>/review` — approve / reject / promote to fallback | ❌ | ✅ |
+| `/audit` — append-only event log view | ✅ (own docs) | ✅ (all) |
+
+A Flask `@require_role("owner")` / `@require_role("attorney")` decorator guards each route — two simple decorators, no framework.
+
+---
+
+## 17. Data & Persistence (SQLite + seed.json)
+
+**Why SQLite:** zero-config, file-based, ships with Python. Right-sized for a single-tenant prototype. No separate DB server to manage or deploy.
+
+**Why `seed.json`:** Replit's ephemeral container means the SQLite file can be wiped on redeploy. `seed.json` is the durable store committed to the repo. The lifecycle is:
+
+```
+App startup:   seed.json ──► database.py ──► SQLite (working store)
+App shutdown / export:  SQLite ──► database.py ──► seed.json (written back to disk)
+```
+
+`database.py` owns both directions — `seed_from_file()` and `dump_to_file()` — and is called from `app.py`'s startup and a `/admin/export` route.
+
+**Tables (mirrors the Pydantic models in §2):**
+
+| Table | Key columns | Notes |
+|---|---|---|
+| `documents` | `doc_id`, `source_type`, `status`, `uploaded_by`, `uploaded_at` | Metadata only; full text stored as a file ref |
+| `clauses` | `clause_id`, `doc_id`, `text`, `start`, `end`, `heading_path` | Populated by `Chunker` |
+| `classifications` | `clause_id`, `clause_type`, `confidence`, `spans` | Populated by `Classifier` |
+| `verdicts` | `clause_id`, `branch`, `status`, `rule_ids`, `rationale` | Populated by `Triage` |
+| `queue_items` | `item_id`, `doc_id`, `priority`, `assignee`, `status` | Populated by `Router` |
+| `playbook_rules` | `rule_id`, `clause_type`, `preferred`, `fallback`, `walk_away`, `risk_weight`, `version` | Editable; version-bumped on every save |
+| `audit_events` | `id`, `timestamp`, `actor`, `stage`, `input_hash`, `prompt_hash`, `output_json`, `prev_hash` | Append-only; `prev_hash` enforced in `AuditLog.append()` |
+
+`seed.json` is simply a JSON dump of these tables, structured as `{ "table_name": [ ...rows ] }`. Committing it to the repo means the demo data (sample contracts, a pre-loaded playbook, a sample queue item) is always available on a fresh deploy.
+
+---
+
+## 18. File Structure
+
+One directory, flat and readable. Every file has one job.
+
+```
+syntra/
+├── app.py                   ← Flask app: ALL routes + Jinja2 templates (single file, ~200 lines)
+│
+├── models.py                ← All Pydantic models: Document, Clause, Classification,
+│                              ClauseVerdict, Playbook, PlaybookRule, QueueItem,
+│                              AuditEvent, Citation  (§2)
+│
+├── database.py              ← SQLite setup · seed_from_file() · dump_to_file()
+├── seed.json                ← Canonical durable store (committed to repo)
+│
+├── pipeline/
+│   ├── ingestor.py          ← Ingestor   — PDF (ADE) + DOCX (python-docx) → Document
+│   ├── chunker.py           ← Chunker    — Document → list[Clause]
+│   ├── classifier.py        ← Classifier — Clause → Classification  (1 LLM call, temp 0)
+│   ├── triage.py            ← Triage     — Classification + Playbook → ClauseVerdict
+│   ├── redliner.py          ← Redliner   — ClauseVerdict[] → tracked-changes .docx
+│   └── router.py            ← Router     — ClauseVerdict[] → QueueItem
+│
+├── knowledge/
+│   ├── index.py             ← KnowledgeIndex  — ContextHub-backed BM25 + embeddings
+│   └── lane_two.py          ← LaneTwoAgent    — smolagents loop over KnowledgeIndex
+│                              (runs only on low-confidence / no-fit clauses)
+│
+├── playbook/
+│   ├── builder.py           ← PlaybookBuilder — infer Playbook v0.1 from existing contracts
+│   ├── editor.py            ← PlaybookEditor  — manual edit + ask-AI (smolagents) + save
+│   └── default.yaml         ← Pre-built NDA + vendor playbook (used if no contracts exist yet)
+│
+└── audit.py                 ← AuditLog — append(event) with prev_hash chaining
+```
+
+**Rule:** `app.py` imports from `pipeline/`, `knowledge/`, `playbook/`, and `audit.py` — but those modules **never import from each other** or from `app.py`. Data flows through Pydantic models only. Sentrux enforces this boundary.
+
+---
+
+## 19. Roadmap
 
 Decisions about what is *not* in the prototype are as deliberate as what is. The table below states the version, the feature, and the reason it is not v1 — so the panel can probe the reasoning, not just the exclusion.
 
 | Version | Feature | Why deferred |
 |---|---|---|
-| **v1 (prototype)** | DOCX + PDF upload, playbook bootstrap, three-way branch, deterministic redline, attorney queue, audit trail | The core loop — everything needed to prove the thesis. |
+| **v1 (prototype)** | DOCX + PDF upload · playbook bootstrap · three-way branch · deterministic redline · lane-two semantic safety net · attorney feedback → playbook rule promotion · two-role auth (owner + attorney) · attorney queue · audit trail · SQLite + seed.json | The full core loop — everything needed to prove the thesis and run a real demo. |
 | **v2** | **Email intake** | Pure mechanics: poll a mailbox, extract attachments, hand to the existing PDF/DOCX adapters. No new architecture. Deferred to keep the prototype focused, not because it is hard. |
-| **v2** | Lane-two semantic safety net (ContextHub + smolagents, fully live) | Scaffolded in v1; the spine must ship and be validated first. Lane two is meaningless without a calibrated baseline from the deterministic path. |
-| **v2** | Attorney feedback → automatic playbook rule promotion | The flywheel depends on enough attorney decisions to be statistically meaningful; the UI and data schema are designed for it in v1, but the auto-promotion logic ships once real data flows. |
 | **v2** | Procurement / employment specialization (expanded clause taxonomy) | Wedge is NDA + vendor contracts; expansion taxonomy is a data exercise on top of the same pipeline. |
 | **v3** | **TabPFN routing calibrator** | Tabular foundation model needs labeled rows at inference — those rows only exist after the attorney loop has run long enough to produce them. Named v3 so the architecture reserves the right slot (audit trail already captures the training signal). |
 | **v3** | Perplexity-based novelty detector | Useful as an *attorney-routing signal* ("this clause is unusually drafted") once the primary path is battle-tested and the false-positive rate of novelty alerts can be measured. |
