@@ -92,7 +92,7 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
     lane_two = LaneTwoAgent()
 
     doc = Ingestor().ingest(path.read_bytes(), source_type, doc_id)
-    segment = Segmenter().segment(doc)
+    segment = Segmenter().segment(doc, playbook)
     clauses = Chunker().chunk(doc)
 
     clause_rows, clf_rows, verdict_rows, v_objects = [], [], [], []

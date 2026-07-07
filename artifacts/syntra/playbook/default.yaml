@@ -35,6 +35,13 @@ policies:
     required: false
     risk_weight: 4
 
+  - id: ip_ownership
+    label: "IP ownership & licensing"
+    clause_type: ip_ownership
+    required: false
+    risk_weight: 5
+    cuad_map: "License Grant"
+
   - id: governing_law
     label: "Governing law"
     clause_type: governing_law
@@ -57,7 +64,7 @@ service_lines:
         id: LL-GEN-SUP-1
         preferred: "Cap = 12 months fees; carve-outs for IP, confidentiality, fraud"
         fallback: "Cap 12–24 months fees with same carve-outs"
-        walk_away: "Uncapped liability or cap below 6 months fees"
+        walk_away: "Uncapped liability, cap below 6 months fees, or liability that sweeps in consequential/indirect/punitive damages"
         risk_weight: 5
         source_doc_ids: []
       term_and_termination:
@@ -67,12 +74,33 @@ service_lines:
         walk_away: "No termination for convenience / lock-in over 2 years"
         risk_weight: 3
         source_doc_ids: []
+      confidentiality:
+        id: CONF-GEN-SUP-1
+        preferred: "Mutual; 2–3 year term; defined categories; standard exclusions (public domain, independently developed, rightfully received)"
+        fallback: "Mutual; up to 5 years; residuals clause acceptable if narrowly scoped"
+        walk_away: "One-sided; perpetual/indefinite obligation; overbroad scope (e.g. covers information 'whether or not disclosed or marked' or presumed confidential); no standard exclusions"
+        risk_weight: 3
+        source_doc_ids: []
       indemnification:
         id: IND-GEN-SUP-1
-        preferred: "Mutual indemnification for own negligence/breach"
-        fallback: "Mutual indemnification with carve-outs for gross negligence"
-        walk_away: "One-sided indemnification solely at our expense"
+        preferred: "Mutual indemnification for own negligence/breach; consequential and punitive damages excluded"
+        fallback: "Mutual indemnity, capped, with carve-outs for gross negligence; excludes indirect/consequential/punitive damages"
+        walk_away: "One-sided or uncapped indemnification, or indemnity that sweeps in consequential/indirect/punitive damages"
         risk_weight: 4
+        source_doc_ids: []
+      ip_ownership:
+        id: IP-GEN-SUP-1
+        preferred: "Each party retains ownership of its own pre-existing IP and confidential information; no license granted beyond what is needed to perform"
+        fallback: "Limited, revocable, non-exclusive, non-transferable license strictly for the stated purpose and term"
+        walk_away: "Any perpetual, irrevocable, worldwide, sublicensable, royalty-free, or commercial-exploitation license over the other party's IP or confidential information"
+        risk_weight: 5
+        source_doc_ids: []
+      governing_law:
+        id: GL-GEN-SUP-1
+        preferred: "Governed by our home jurisdiction; courts of our principal place of business"
+        fallback: "A neutral, well-established jurisdiction (e.g. New York or Delaware)"
+        walk_away: "Exclusive jurisdiction in the counterparty's home forum with no neutral alternative"
+        risk_weight: 2
         source_doc_ids: []
 
   - id: general_customer
@@ -90,15 +118,43 @@ service_lines:
         id: LL-GEN-CUST-1
         preferred: "Cap = 12 months fees paid; mutual"
         fallback: "Cap up to 24 months with mutual carve-outs"
-        walk_away: "Customer liability uncapped while ours is capped"
+        walk_away: "Customer liability uncapped while ours is capped, or liability that sweeps in consequential/indirect/punitive damages"
         risk_weight: 5
+        source_doc_ids: []
+      term_and_termination:
+        id: TT-GEN-CUST-1
+        preferred: "1-year term with 30-day termination for convenience"
+        fallback: "1-year term with 60-day termination notice"
+        walk_away: "No termination for convenience / auto-renew lock-in over 2 years"
+        risk_weight: 3
         source_doc_ids: []
       confidentiality:
         id: CONF-GEN-CUST-1
         preferred: "Mutual NDA; 3-year post-termination obligation; standard exclusions"
         fallback: "Mutual NDA; up to 5 years; carve-outs for independently developed IP"
-        walk_away: "Perpetual obligation with no carve-outs for public domain"
+        walk_away: "One-sided; perpetual obligation with no carve-outs for public domain; overbroad scope (e.g. 'whether or not disclosed or marked')"
         risk_weight: 3
+        source_doc_ids: []
+      indemnification:
+        id: IND-GEN-CUST-1
+        preferred: "Mutual indemnification for own negligence/breach; consequential and punitive damages excluded"
+        fallback: "Mutual indemnity, capped, excludes indirect/consequential/punitive damages"
+        walk_away: "One-sided or uncapped indemnity, or indemnity that sweeps in consequential/indirect/punitive damages"
+        risk_weight: 4
+        source_doc_ids: []
+      ip_ownership:
+        id: IP-GEN-CUST-1
+        preferred: "Each party retains ownership of its own pre-existing IP; the other party receives only the license expressly needed to use the deliverables"
+        fallback: "Limited, non-exclusive license for the stated purpose and term"
+        walk_away: "Any perpetual, irrevocable, worldwide, sublicensable, royalty-free, or commercial-exploitation license over the other party's IP or confidential information"
+        risk_weight: 5
+        source_doc_ids: []
+      governing_law:
+        id: GL-GEN-CUST-1
+        preferred: "Governed by our home jurisdiction; courts of our principal place of business"
+        fallback: "A neutral, well-established jurisdiction (e.g. New York or Delaware)"
+        walk_away: "Exclusive jurisdiction in the counterparty's home forum with no neutral alternative"
+        risk_weight: 2
         source_doc_ids: []
 
   - id: nda_standalone
@@ -107,8 +163,22 @@ service_lines:
     positions:
       confidentiality:
         id: CONF-NDA-1
-        preferred: "Mutual; 2-year term; standard exclusions; no residuals clause"
+        preferred: "Mutual; 2-year term; defined categories of Confidential Information; standard exclusions (public domain, independently developed, rightfully received); no residuals clause"
         fallback: "Mutual; up to 3-year term; residuals clause acceptable if narrowly scoped"
-        walk_away: "One-sided NDA only in counterparty's favour"
+        walk_away: "One-sided; perpetual/indefinite confidentiality; overbroad scope (e.g. covers information 'whether or not disclosed or marked' or presumed confidential in perpetuity); no standard exclusions"
         risk_weight: 3
+        source_doc_ids: []
+      indemnification:
+        id: IND-NDA-1
+        preferred: "No indemnification, or narrowly mutual solely for breach of confidentiality"
+        fallback: "Mutual indemnity, capped, excludes indirect/consequential/punitive damages"
+        walk_away: "Uncapped or one-sided indemnity, or indemnity that sweeps in consequential/indirect/punitive damages"
+        risk_weight: 5
+        source_doc_ids: []
+      ip_ownership:
+        id: IP-NDA-1
+        preferred: "Disclosing party retains all rights to its Confidential Information; no license granted beyond evaluating the stated Purpose"
+        fallback: "Limited, revocable, non-transferable license to use disclosed information solely for the stated Purpose"
+        walk_away: "Any perpetual, irrevocable, worldwide, sublicensable, royalty-free, or commercial-exploitation license over a party's Confidential Information (beyond use for the stated Purpose)"
+        risk_weight: 5
         source_doc_ids: []

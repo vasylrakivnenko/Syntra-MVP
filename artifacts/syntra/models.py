@@ -77,12 +77,28 @@ class Playbook(BaseModel):
         return next((sl for sl in self.service_lines if sl.id == service_line_id), None)
 
     def lookup(self, service_line_id: str, clause_type: str) -> Optional[Position]:
-        """Two-axis deterministic lookup: playbook[segment][clause_type]."""
+        """Two-axis deterministic lookup: playbook[service_line][clause_type].
+
+        If the specific service line has no position for this clause type, fall back
+        to the general row for the same side (general_supplier / general_customer) so
+        broad clause types (liability, indemnification, IP) stay comparable even for
+        specialised rows like a standalone NDA.
+        """
         policy = self.get_policy_by_clause_type(clause_type)
-        sl = self.get_service_line(service_line_id)
-        if policy is None or sl is None:
+        if policy is None:
             return None
-        return sl.positions.get(policy.id)
+        sl = self.get_service_line(service_line_id)
+        if sl is None:
+            return None
+        position = sl.positions.get(policy.id)
+        if position is not None:
+            return position
+        general_id = "general_customer" if sl.side == "customer" else "general_supplier"
+        if general_id != service_line_id:
+            general = self.get_service_line(general_id)
+            if general is not None:
+                return general.positions.get(policy.id)
+        return None
 
 
 class ClauseVerdict(BaseModel):
