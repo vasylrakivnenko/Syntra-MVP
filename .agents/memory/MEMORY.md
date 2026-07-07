@@ -1,1 +1,2 @@
 - [Python artifact registration](python-artifact-registration.md) — register Flask apps in the monorepo: createArtifact first, then verifyAndReplaceArtifactToml; keep integratedSkills unchanged.
+- [Legal clause segmentation](legal-clause-segmentation.md) — Syntra splits contracts via LLM-returned verbatim anchors; regex/paragraph are no-key fallbacks.
