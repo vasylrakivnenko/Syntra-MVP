@@ -15,7 +15,7 @@ paths = [ "/" ]
 localPort = 5000
 
 [services.development]
-run = "python3 artifacts/syntra/app.py"
+run = "python3 /home/runner/workspace/artifacts/syntra/app.py"
 
 [services.production]
 build = [ "python3", "-c", "print('no build step')" ]
