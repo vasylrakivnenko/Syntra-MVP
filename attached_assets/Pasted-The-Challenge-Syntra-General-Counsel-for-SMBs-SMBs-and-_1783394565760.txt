@@ -1,0 +1,23 @@
+The Challenge: Syntra (General Counsel for SMBs)
+SMBs and mid-market companies are under-served by legal support: outside counsel is expensive and slow, and in-house counsel usually arrives too late. The wedge is an AI-native general counsel product that ingests contracts or legal requests, compares them to company positions, drafts redlines and responses, flags risk, and routes high-risk items to a supervising attorney.
+
+Show grounded contract review where every redline and risk flag cites company agreements, policies, or surfaced clauses from the counterparty document.
+
+Ingest an inbound contract or legal request, produce a redline plus plain-language risk summary grounded in company positions and policies, and route flagged items to a supervising attorney with full context attached.
+
+Every redline and risk flag must cite company knowledge or the source document.
+Attorney-in-the-loop enforcement for issues above a risk threshold.
+Privilege-aware access controls and a full audit trail of model actions.
+At least one depth area: contract review, company playbooks, attorney queue design, privilege controls, audit trail and version history, or a procurement/employment specialization.
+HOW WE EVALUATE
+Working Prototype is the main event.
+Build evidence beats polish: source code remains required build evidence, and demo video is not a substitute for source code or a runnable prototype.
+Rough is fine. Candidates can use any tools and AI assistants they want.
+A polished prompt, generated document, or thin wrapper around an LLM is not enough and will not be panel-ready.
+Reviewers look at demo video, TDD, and PRD first, then verify the implementation through the prototype and source code.
+PRD and TDD should each be 1-2 pages and act as show-your-work documents.
+PRD
+Define the operator user and supervising attorney, explain why an AI-native GC fits the SMB gap, and map the expansion from contract review to broader legal operations.
+
+TDD
+Cover DOCX/PDF/email ingestion, retrieval over company knowledge, clause extraction and comparison, explainable redline generation, attorney review queue design, and the audit trail schema.

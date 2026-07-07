@@ -1,0 +1,142 @@
+# Syntra Builder Challenge — Build Specification v0.1
+
+Working spec. Consolidates all decisions to date. Open items marked ⚠️.
+
+---
+
+## 1. Product definition
+
+**One-liner:** AI-native general counsel for SMBs — playbook-grounded contract triage that redlines what it can, explains what it finds, and routes what it can't to a supervising attorney with a pre-built brief.
+
+**Design center (single user):** The operator — ops/finance/first-legal-hire at a 20–200 person company who triages every inbound contract with no lawyer on staff. The supervising attorney is a **role in the loop, not a second user**: gets a functional queue with full context, not a designed experience. (Resolves the two-user tension in the brief; state this explicitly in the PRD.)
+
+**Wedge:** Inbound NDAs and vendor contracts. Expansion: MSAs, DPAs, employment.
+
+**Positioning (from competitive brief):** The unoccupied combination = playbook-grounded redlining + risk routing + supervising-attorney escalation for companies with NO in-house lawyer. Software incumbents (Wordsmith, GC AI, LegalOn, Ivo, Spellbook) sell to lawyers; service players (Superlegal, Rocket Lawyer) lack the always-on grounded-triage platform. Closest threat: Superlegal.
+
+---
+
+## 2. Core pipeline (the spine)
+
+```
+Ingest → Chunk → Classify → { Verdict | Silence | Abstain } → Route → Redline + Summary → Audit
+```
+
+### 2.1 Ingest
+- DOCX, PDF, email attachment. Normalize to internal doc model preserving structure and character offsets (offsets are load-bearing: citations anchor to them).
+- ⚠️ Open: email intake in prototype scope, or DOCX/PDF upload only with email in TDD as designed?
+
+### 2.2 Chunk
+- Structural segmentation by article/clause. Preserve hierarchy — sub-clauses inherit parent context.
+- No fixed-size chunking. Legal meaning follows document structure.
+
+### 2.3 Classify (the spine decision)
+- Each clause → playbook taxonomy via one cheap LLM call. Temperature 0, structured output, confidence score.
+- **Runtime taxonomy comes from the playbook, NOT CUAD's 41 categories.** 12–20 types for the wedge: liability cap, indemnification, term/termination, confidentiality scope, IP ownership, payment terms, governing law, auto-renewal, data protection, assignment, warranties, dispute resolution…
+- CUAD categories = eval yardstick only. Map runtime taxonomy → CUAD where overlapping to report benchmark numbers.
+- Matching to playbook rules is then a **deterministic lookup** (clause type → rules for that type). No similarity math in the primary path. Explanation is human-checkable: "§7.2 → Limitation of Liability → rule LL-1."
+
+### 2.4 Three-way branch (the product)
+| Branch | Trigger | Output |
+|---|---|---|
+| **Verdict** | Clause classified, rules matched | complies / acceptable deviation / unacceptable / unusual — with cited spans + playbook rule IDs + rationale |
+| **Silence** | Playbook-required type, zero classified hits | "Contract is silent on X; playbook requires X" |
+| **Abstain** | Low classification confidence, taxonomy no-fit, or lane disagreement | "Insufficient grounding" → route to attorney with reason |
+
+One LLM judgment call per clause, rules bundled (preferred/fallback/walk-away in one call — not per pair).
+
+**Abstention is the anti-wrapper proof.** A wrapper always answers; Syntra visibly declines and explains why. Make it prominent in the demo.
+
+### 2.5 Semantic safety-net lane (lane two)
+- Hybrid BM25 + embeddings (exact defined terms matter) → legal-domain reranker.
+- Applies only to low-confidence / no-fit clauses.
+- **Lane disagreement is itself a routing signal** → abstain → attorney.
+- 48h priority: classification spine is must-build; lane two may live in TDD as designed-but-stubbed.
+
+### 2.6 Killed components (keep the rationale — panel will probe)
+- **Perplexity as matcher: killed.** Measures predictability, not relevance; boilerplate scores low, dangerous bespoke drafting scores high; indefensible under "why is low perplexity evidence of relevance?" Salvage: perplexity vs. standard contract language = novelty detector → v2 attorney-routing feature.
+- **Reranker as primary matcher: demoted** to lane two. Taxonomy lookup categorically more explainable than a 0.83 cross-encoder score.
+- **Binary contradiction as output space: killed.** Floods false positives on in-fallback deviations (the precision failure that kills trust) and structurally cannot detect absence — pairwise checks require both paragraphs to exist; worst risks are missing clauses.
+- **Feature-binned NN / trained classifier: killed for v1.** No labeled data, destroys explainability, can't emit grounded redlines; binning discards the "shall vs may" signal. (LawGeex history = the cautionary tale; its founders rebuilt on LLMs as Superlegal.)
+- **TabPFN / tabular foundation models: right tool, wrong stage.** In-context, not truly zero-shot — needs labeled rows at inference, which only exist after the attorney loop generates them. Named v2 candidate for the routing calibrator (small-sample tabular = its sweet spot). One paragraph in TDD future work.
+
+---
+
+## 3. Playbook (grounding source + declared depth area)
+
+- **Structured data, not prose.** Per clause type: preferred position, fallback range, walk-away, risk weight, required-or-optional flag, version.
+- Format: YAML (versioned, diffable, human-editable).
+- ⚠️ Open: exact schema — draft next. (Depth area = explainable redline generation grounded in playbook; the thesis-matching choice.)
+- Ship with a pre-built default playbook for NDA + vendor contract (mirrors LegalOn's proven "attorney-built playbooks out of the box" strength — the no-legal-team customer can't author standards from scratch).
+
+---
+
+## 4. Routing & attorney loop
+
+Three routing signals from the pipeline (not just a score):
+1. **Whether** — all clauses comply / in-fallback and nothing required missing → **auto-clear with redline** (green light + tracked-changes doc proposing moves toward preferred positions, each edit citing its rule). Most contracts must not touch a lawyer — that's the economics.
+2. **Why** — the specific trigger (unacceptable deviation / silence / abstention) with cited spans + rule attached → attorney opens a pre-built brief, not a raw contract. 2-hour review → 15 minutes; that delta is the margin.
+3. **To whom** — matter type + state + specialization. (RL/LZ do only this, administratively; Syntra routes by risk from inside the document.)
+
+**Feedback arrow (the moat):** attorney approves a deviation → optionally becomes a new fallback rule → system routes less next time. Every escalation is a labeled example → powers the v2 calibrator.
+
+**Attorney layer structure (PRD):** closed panel / legal-plan model (Rocket Lawyer/LegalZoom pattern) for v1 — faster, regulatory-lighter; Superlegal-style owned firm (Utah sandbox) as the deeper alternative. Panel-first.
+
+**UPL guardrail:** framing is always "AI triages and packages; attorney advises." The threshold gate is compliance architecture, not just UX.
+
+---
+
+## 5. Trust surface (required by brief)
+
+- **Citations:** every redline + flag anchors to playbook rule ID or character-offset span in the source doc. No un-anchored claims.
+- **Privilege controls:** simple role gate (operator vs. attorney) — present, not elaborate.
+- **Audit trail:** append-only event schema — actor, model, prompt hash, input hash, output, citations, timestamp. Schema in TDD; one visible trace view in UI.
+- **Word-native output:** export real .docx redline with tracked changes. Web-only diff = engineer-built; Word artifact = user empathy. Differentiator almost nobody will build.
+
+---
+
+## 6. Evaluation plan
+
+- **Public benchmarks (TDD, not UI):** CUAD (clause extraction F1, Jaccard-threshold spans), ContractNLI (NDA entailment — maps to wedge), ContractEval framing (correctness F1 + "laziness"/false-no-clause rate — report abstention rate against it). LegalBench-RAG only if lane two ships.
+- **Known gap to name in TDD:** all public sets are SEC/EDGAR paper — large-cap, well-drafted; SME inbound is messier. Public numbers ≠ product numbers.
+- **Bespoke golden set:** small set of real/synthetic SME NDAs + vendor contracts. Score: recall on high-stakes clause types (weighted — missed liability cap ≫ false flag), precision (no reviewer flooding), routing-decision accuracy (human-needed vs auto-clear), silence detection.
+- ⚠️ Open: golden-set annotation rubric — draft next.
+- Eval numbers live in the TDD (founder discipline), never as an in-product dashboard (brief explicitly warns).
+
+---
+
+## 7. Architecture Q&A pre-loads (decide before AI writes code; keep decision log)
+
+| Probe | Answer |
+|---|---|
+| Why structured lookup over vector DB? | At SMB playbook scale, deterministic matching beats semantic search; embeddings reserved for precedent corpus later |
+| Why prompt + grounding over fine-tune? | No data moat yet; auditability demands citations, not weights |
+| 10x latency? | Review is minutes-scale async, not chat — queue problem, not architecture crisis |
+| Model wrong? | Abstention path + attorney threshold + audit trail; deterministic risk rubric from playbook deviation, LLM only generates rationale |
+| Why LLM over trained ML? | §2.6 — zero-shot via playbook-as-knowledge, generative outputs required, no labels until flywheel runs |
+
+---
+
+## 8. Submission checklist (template fields)
+
+- Demo video 2–5 min, one take, core loop only: messy vendor contract → parse → grounded redline → risk summary → one item crosses threshold → attorney queue with context → tracked-changes export. No slide intro.
+- PRD 1–2 pp: operator persona (design center) + attorney role; why AI-native GC fits SMB gap; expansion map; **user-feedback story** (2–3 real target users — founder network / ops contacts; NOT Stanford-adjacent); competitive positioning (Superlegal/Wordsmith/white space).
+- TDD 1–2 pp: ingestion, pipeline + branch logic, playbook schema, routing, audit schema, eval numbers, killed-alternatives rationale, v2 flywheel + TabPFN calibrator paragraph.
+- Source code + access notes.
+- "What I personally built / reused / what broke" — **keep build journal from hour one.**
+- 90-second pitch: open with FMF story (ran 170-person company, was the operator triaging contracts, paid slow expensive outside counsel; legal AI is current day job).
+
+## 9. Hard constraints
+
+- Own hardware, own time, zero Stanford Lab data/code/people. Clean separation.
+- One user, one workflow, no new ideas mid-build.
+- Rough is fine; wrapper is fatal. Depth over polish.
+
+## 10. Open items (next artifacts)
+
+1. ⚠️ Playbook YAML schema + clause taxonomy (blocks everything — first)
+2. ⚠️ Golden-set annotation rubric
+3. ⚠️ PRD skeleton
+4. ⚠️ TDD skeleton
+5. ⚠️ Day-by-day (hour-by-hour) 48h build plan
+6. ⚠️ Email ingest: in or out of prototype scope
