@@ -30,6 +30,34 @@
       <a class="nav-link text-white-50" href="/playbook"><i class="bi bi-table"></i> Playbook</a>
       <a class="nav-link text-white-50" href="/queue"><i class="bi bi-list-check"></i> Queue</a>
       <a class="nav-link text-white-50" href="/audit"><i class="bi bi-journal-check"></i> Audit</a>
+      {% if inbox %}
+      <div class="nav-item dropdown">
+        <a class="nav-link text-white-50 position-relative px-1" href="#"
+           data-bs-toggle="dropdown" aria-label="Notifications">
+          <i class="bi bi-bell fs-6"></i>
+          {% if inbox.count %}
+          <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
+                style="font-size:.6rem;">{{ inbox.count }}</span>
+          {% endif %}
+        </a>
+        <ul class="dropdown-menu dropdown-menu-end shadow" style="min-width:330px;">
+          <li><h6 class="dropdown-header">{{ inbox.title }}</h6></li>
+          {% for it in inbox.entries %}
+          <li>
+            <a class="dropdown-item py-2" href="{{ it.url }}">
+              <div class="d-flex justify-content-between align-items-center gap-3">
+                <span class="fw-semibold text-truncate" style="max-width:210px;">{{ it.filename }}</span>
+                <span class="badge bg-{{ it.badge }}">{{ it.label | title }}</span>
+              </div>
+              <small class="text-muted d-block text-truncate" style="max-width:300px;">{{ it.detail }}</small>
+            </a>
+          </li>
+          {% else %}
+          <li><span class="dropdown-item-text text-muted small">Nothing needs your attention.</span></li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
       <span class="text-secondary small ms-2">{{ user.username }} · {{ user.role }}</span>
       <a class="nav-link text-white-50" href="/logout">Sign out</a>
     </div>

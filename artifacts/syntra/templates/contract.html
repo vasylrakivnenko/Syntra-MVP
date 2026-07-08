@@ -36,11 +36,17 @@
 </div>
 {% elif queue_item and queue_item.status == 'approved' %}
 <div class="alert alert-success py-2 mb-3">
-  <i class="bi bi-check2-circle me-1"></i><strong>Approved by attorney</strong>{% if queue_item.attorney_notes %} — {{ queue_item.attorney_notes }}{% endif %}
+  <i class="bi bi-check2-circle me-1"></i><strong>Approved by attorney</strong>
+  {%- if queue_item.reviewed_by %} ({{ queue_item.reviewed_by }}{% if queue_item.reviewed_at %}, {{ queue_item.reviewed_at[:10] }}{% endif %}){% endif %}
+  {%- if queue_item.attorney_notes %} — {{ queue_item.attorney_notes }}{% endif %}
+  — cleared to send the redline to the counterparty.
 </div>
 {% elif queue_item and queue_item.status == 'rejected' %}
 <div class="alert alert-danger py-2 mb-3">
-  <i class="bi bi-x-circle me-1"></i><strong>Rejected by attorney</strong>{% if queue_item.attorney_notes %} — {{ queue_item.attorney_notes }}{% endif %}
+  <i class="bi bi-x-circle me-1"></i><strong>Rejected by attorney</strong>
+  {%- if queue_item.reviewed_by %} ({{ queue_item.reviewed_by }}{% if queue_item.reviewed_at %}, {{ queue_item.reviewed_at[:10] }}{% endif %}){% endif %}
+  {%- if queue_item.attorney_notes %} — {{ queue_item.attorney_notes }}{% endif %}
+  <div class="small mt-1"><strong>Next step:</strong> address the attorney's notes with the counterparty, then upload the revised version — Syntra will re-run the full analysis.</div>
 </div>
 {% elif doc.status == 'processed' %}
 <div class="alert alert-success py-2 mb-3">

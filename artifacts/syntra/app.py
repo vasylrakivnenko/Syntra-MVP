@@ -263,6 +263,69 @@ def nda_perspective(service_line, side=None):
     return _NDA_PERSPECTIVE.get(service_line or "")
 
 
+@app.context_processor
+def inject_inbox():
+    """Navbar bell: role-aware attention list.
+
+    Attorneys see contracts waiting on their review; everyone else sees
+    attorney decisions on their own uploads that they have not yet opened
+    (viewing the contract page acknowledges the decision).
+    """
+    user = current_user()
+    if not user:
+        return {"inbox": None}
+    items = []
+    try:
+        with get_db() as db:
+            if user["role"] == "attorney":
+                count = db.execute(
+                    "SELECT COUNT(*) AS n FROM queue_items WHERE status='pending'",
+                ).fetchone()["n"]
+                rows = db.execute(
+                    """SELECT q.item_id, q.doc_id, q.reason, q.priority, d.filename
+                       FROM queue_items q JOIN documents d ON q.doc_id=d.doc_id
+                       WHERE q.status='pending'
+                       ORDER BY q.priority DESC LIMIT 8""",
+                ).fetchall()
+                items = [{
+                    "url": url_for("review", item_id=r["item_id"]),
+                    "filename": r["filename"],
+                    "label": f"priority {r['priority']}",
+                    "badge": "warning text-dark",
+                    "detail": (r["reason"] or "Escalated for review")[:90],
+                } for r in rows]
+                title = "Awaiting your review"
+            else:
+                count = db.execute(
+                    """SELECT COUNT(*) AS n
+                       FROM queue_items q JOIN documents d ON q.doc_id=d.doc_id
+                       WHERE q.status IN ('approved','rejected')
+                         AND q.acknowledged_at IS NULL AND d.uploaded_by=?""",
+                    (user["user_id"],),
+                ).fetchone()["n"]
+                rows = db.execute(
+                    """SELECT q.doc_id, q.status, q.reviewed_at, q.reviewed_by,
+                              q.attorney_notes, d.filename
+                       FROM queue_items q JOIN documents d ON q.doc_id=d.doc_id
+                       WHERE q.status IN ('approved','rejected')
+                         AND q.acknowledged_at IS NULL AND d.uploaded_by=?
+                       ORDER BY q.reviewed_at DESC LIMIT 8""",
+                    (user["user_id"],),
+                ).fetchall()
+                items = [{
+                    "url": url_for("contract", doc_id=r["doc_id"]),
+                    "filename": r["filename"],
+                    "label": r["status"],
+                    "badge": "success" if r["status"] == "approved" else "danger",
+                    "detail": (f"by {r['reviewed_by']}" if r["reviewed_by"] else "by attorney")
+                              + (f" · {r['reviewed_at'][:10]}" if r["reviewed_at"] else ""),
+                } for r in rows]
+                title = "Attorney decisions"
+    except Exception:
+        return {"inbox": None}
+    return {"inbox": {"count": count, "entries": items, "title": title}}
+
+
 # ── routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
 @login_required
@@ -469,6 +532,16 @@ def contract(doc_id):
             abort(404)
         if doc["status"] == "awaiting_party":
             return redirect(url_for("select_party", doc_id=doc_id))
+        # Opening the contract acknowledges any attorney decision on it —
+        # this is what clears the item from the uploader's inbox bell.
+        acked = 0
+        if doc["uploaded_by"] == current_user()["user_id"]:
+            acked = db.execute(
+                """UPDATE queue_items SET acknowledged_at=?
+                   WHERE doc_id=? AND status IN ('approved','rejected')
+                     AND acknowledged_at IS NULL""",
+                (datetime.datetime.utcnow().isoformat(), doc_id),
+            ).rowcount
         rows = db.execute(
             """SELECT v.*, c.text AS clause_text, cl.clause_type, cl.confidence
                FROM verdicts v
@@ -477,6 +550,13 @@ def contract(doc_id):
                WHERE v.doc_id=? ORDER BY v.risk_weight DESC""",
             (doc_id,),
         ).fetchall()
+    if acked:
+        try:  # read receipt on a legal decision belongs in the audit chain
+            AuditLog().append_simple(
+                current_user()["user_id"], "decision_acknowledged", doc_id
+            )
+        except Exception:
+            pass  # never block the contract page on audit enrichment
     verdicts = _process_verdicts(rows)
     with get_db() as db:
         queue_item = db.execute(
@@ -596,24 +676,37 @@ def queue():
 @app.route("/queue/<item_id>/review", methods=["GET", "POST"])
 @attorney_required
 def review(item_id):
+    if request.method == "POST":
+        decision = request.form.get("decision", "rejected")
+        if decision not in ("approved", "rejected"):
+            decision = "rejected"
+        notes = request.form.get("notes", "")
+        with get_db() as db:
+            item = db.execute(
+                "SELECT * FROM queue_items WHERE item_id=?", (item_id,)
+            ).fetchone()
+            if not item:
+                abort(404)
+            # acknowledged_at resets to NULL so a re-review re-notifies the operator.
+            db.execute(
+                """UPDATE queue_items
+                   SET status=?, attorney_notes=?, reviewed_at=?, reviewed_by=?,
+                       acknowledged_at=NULL
+                   WHERE item_id=?""",
+                (decision, notes, datetime.datetime.utcnow().isoformat(),
+                 current_user()["username"], item_id),
+            )
+        # Audit outside the transaction: AuditLog opens its own connection,
+        # and SQLite allows only one writer at a time.
+        AuditLog().append_simple(
+            current_user()["user_id"], f"review_{decision}", item["doc_id"]
+        )
+        flash(f"Contract {decision}.")
+        return redirect(url_for("queue"))
     with get_db() as db:
         item = db.execute("SELECT * FROM queue_items WHERE item_id=?", (item_id,)).fetchone()
         if not item:
             abort(404)
-        if request.method == "POST":
-            decision = request.form.get("decision", "rejected")
-            if decision not in ("approved", "rejected"):
-                decision = "rejected"
-            notes = request.form.get("notes", "")
-            db.execute(
-                "UPDATE queue_items SET status=?, attorney_notes=? WHERE item_id=?",
-                (decision, notes, item_id),
-            )
-            AuditLog().append_simple(
-                current_user()["user_id"], f"review_{decision}", item["doc_id"]
-            )
-            flash(f"Contract {decision}.")
-            return redirect(url_for("queue"))
         rows = db.execute(
             """SELECT v.*, c.text AS clause_text, cl.clause_type
                FROM verdicts v
