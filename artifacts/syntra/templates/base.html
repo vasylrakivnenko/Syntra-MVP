@@ -52,12 +52,11 @@
         <a class="nav-link text-white-50 position-relative px-1" href="#"
            data-bs-toggle="dropdown" aria-label="Notifications">
           <i class="bi bi-bell fs-6"></i>
-          {% if inbox.count %}
-          <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
-                style="font-size:.6rem;">{{ inbox.count }}</span>
-          {% endif %}
+          <span id="bell-badge"
+                class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger{% if not inbox.count %} d-none{% endif %}"
+                style="font-size:.6rem;">{{ inbox.count or '' }}</span>
         </a>
-        <ul class="dropdown-menu dropdown-menu-end shadow" style="min-width:330px;">
+        <ul id="bell-list" class="dropdown-menu dropdown-menu-end shadow" style="min-width:330px;">
           <li><h6 class="dropdown-header">{{ inbox.title }}</h6></li>
           {% for it in inbox.entries %}
           <li>
@@ -143,6 +142,67 @@
   {% if show_mvp_modal %}modal.show();{% endif %}
 })();
 </script>
+{% if inbox %}
+<script>
+(function () {
+  const badge = document.getElementById("bell-badge");
+  const list = document.getElementById("bell-list");
+  if (!badge || !list) return;
+  function render(data) {
+    badge.classList.toggle("d-none", !data.count);
+    badge.textContent = data.count || "";
+    list.replaceChildren();
+    const head = document.createElement("li");
+    const h6 = document.createElement("h6");
+    h6.className = "dropdown-header";
+    h6.textContent = data.title;
+    head.appendChild(h6);
+    list.appendChild(head);
+    if (!data.entries.length) {
+      const li = document.createElement("li");
+      const span = document.createElement("span");
+      span.className = "dropdown-item-text text-muted small";
+      span.textContent = "Nothing needs your attention.";
+      li.appendChild(span);
+      list.appendChild(li);
+      return;
+    }
+    for (const it of data.entries) {
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.className = "dropdown-item py-2";
+      a.href = it.url;
+      const row = document.createElement("div");
+      row.className = "d-flex justify-content-between align-items-center gap-3";
+      const name = document.createElement("span");
+      name.className = "fw-semibold text-truncate";
+      name.style.maxWidth = "210px";
+      name.textContent = it.filename;
+      const b = document.createElement("span");
+      b.className = "badge bg-" + it.badge;
+      b.textContent = it.label.charAt(0).toUpperCase() + it.label.slice(1);
+      row.append(name, b);
+      const detail = document.createElement("small");
+      detail.className = "text-muted d-block text-truncate";
+      detail.style.maxWidth = "300px";
+      detail.textContent = it.detail;
+      a.append(row, detail);
+      li.appendChild(a);
+      list.appendChild(li);
+    }
+  }
+  async function poll() {
+    try {
+      const r = await fetch("/notifications.json");
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data) render(data);
+    } catch (e) { /* transient network error — retry next tick */ }
+  }
+  setInterval(poll, 12000);
+})();
+</script>
+{% endif %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

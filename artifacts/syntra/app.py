@@ -339,17 +339,16 @@ def inject_mvp_notice():
     return {"show_mvp_modal": session.pop("mvp_notice", False)}
 
 
-@app.context_processor
-def inject_inbox():
-    """Navbar bell: role-aware attention list.
+def _inbox_payload(user):
+    """Navbar bell payload: role-aware attention list.
 
     Attorneys see contracts waiting on their review; everyone else sees
-    attorney decisions on their own uploads that they have not yet opened
-    (viewing the contract page acknowledges the decision).
+    attorney decisions on their own uploads that they have not yet
+    acknowledged (clicking the bell notification acknowledges — a plain
+    page view/refresh must NOT clear the bell).
     """
-    user = current_user()
     if not user:
-        return {"inbox": None}
+        return None
     items = []
     try:
         with get_db() as db:
@@ -398,7 +397,7 @@ def inject_inbox():
                     (user["user_id"],),
                 ).fetchall()
                 items = [{
-                    "url": url_for("contract", doc_id=r["doc_id"]),
+                    "url": url_for("contract", doc_id=r["doc_id"], ack=1),
                     "filename": r["filename"],
                     "label": r["status"],
                     "badge": "success" if r["status"] == "approved" else "danger",
@@ -407,8 +406,23 @@ def inject_inbox():
                 } for r in rows]
                 title = "Attorney decisions"
     except Exception:
-        return {"inbox": None}
-    return {"inbox": {"count": count, "entries": items, "title": title}}
+        return None
+    return {"count": count, "entries": items, "title": title}
+
+
+@app.context_processor
+def inject_inbox():
+    return {"inbox": _inbox_payload(current_user())}
+
+
+@app.route("/notifications.json")
+@login_required
+def api_notifications():
+    """Live poll target for the navbar bell (role-aware).
+
+    NOTE: must NOT live under /api/* — the workspace proxy routes that
+    prefix to a different artifact, so the Flask app never sees it."""
+    return jsonify(_inbox_payload(current_user()))
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -629,6 +643,18 @@ def job_status(doc_id):
     return jsonify(job)
 
 
+@app.route("/contracts/<doc_id>/review-status")
+@login_required
+def review_status(doc_id):
+    """Live poll target: latest attorney review status for a document."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT status FROM queue_items WHERE doc_id=? ORDER BY rowid DESC LIMIT 1",
+            (doc_id,),
+        ).fetchone()
+    return jsonify({"review_status": row["status"] if row else None})
+
+
 @app.route("/contracts")
 @login_required
 def contracts():
@@ -650,10 +676,11 @@ def contract(doc_id):
             abort(404)
         if doc["status"] == "awaiting_party":
             return redirect(url_for("select_party", doc_id=doc_id))
-        # Opening the contract acknowledges any attorney decision on it —
-        # this is what clears the item from the uploader's inbox bell.
+        # Clicking the bell notification (?ack=1) acknowledges the attorney
+        # decision. A plain page view/refresh must NOT clear the bell — the
+        # operator may see the status banner without having noticed the bell.
         acked = 0
-        if doc["uploaded_by"] == current_user()["user_id"]:
+        if doc["uploaded_by"] == current_user()["user_id"] and request.args.get("ack"):
             acked = db.execute(
                 """UPDATE queue_items SET acknowledged_at=?
                    WHERE doc_id=? AND status IN ('approved','rejected')

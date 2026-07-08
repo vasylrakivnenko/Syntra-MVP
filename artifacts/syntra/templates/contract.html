@@ -278,3 +278,30 @@
 {% endif %}
 
 {% endblock %}
+
+{% block scripts %}
+<script>
+// Drop ?ack=1 after the bell-click acknowledgment so refreshing this page
+// later can never silently acknowledge a future re-review decision.
+if (new URLSearchParams(location.search).has("ack")) {
+  const u = new URL(location.href);
+  u.searchParams.delete("ack");
+  history.replaceState(null, "", u);
+}
+</script>
+{% if queue_item and queue_item.status == 'pending' %}
+<script>
+(function () {
+  async function check() {
+    try {
+      const r = await fetch("/contracts/{{ doc.doc_id }}/review-status");
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.review_status && d.review_status !== "pending") location.reload();
+    } catch (e) { /* transient network error — retry next tick */ }
+  }
+  setInterval(check, 10000);
+})();
+</script>
+{% endif %}
+{% endblock %}
