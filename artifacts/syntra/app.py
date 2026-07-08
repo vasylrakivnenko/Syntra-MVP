@@ -149,17 +149,72 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
         )
     AuditLog().append_simple(user_id, "pipeline_run", doc_id)
 
-    # Advisory market benchmarking for NDAs — must never break core analysis.
+    # Market benchmarking for NDAs. Raw off-market stats stay advisory; routing
+    # reacts only when the favorability assessment judges a flagged combination
+    # unfavorable to our position AND the playbook missed it. Failures here
+    # must never break core analysis.
     if (segment.service_line or "").startswith("nda"):
         try:
-            from pipeline.market import run_market_lens
+            from models import QueueItem
+            from pipeline.market import (assess_market_flags, market_escalation_reason,
+                                         market_escalations, run_market_lens)
             report = run_market_lens(doc.full_text, filename)
+            try:
+                clause_types = {r[0]: r[1] for r in clf_rows}
+                playbook_findings = [
+                    {"clause_type": clause_types.get(v.clause_id, "missing clause"),
+                     "status": v.status or v.branch,
+                     "rationale": v.rationale or v.reason or ""}
+                    for v in v_objects
+                    if v.branch == "silence"
+                    or (v.branch == "verdict"
+                        and v.status in ("unacceptable", "acceptable_deviation"))
+                ]
+                perspective = _NDA_PERSPECTIVE.get(segment.service_line,
+                                                   segment.side or "mutual")
+                report["assessments"] = assess_market_flags(report, perspective,
+                                                            playbook_findings)
+            except Exception:
+                # Assessment is enrichment — keep the advisory card either way.
+                report["assessments"] = []
+                print(f"[market-lens] assessment failed for {doc_id}:\n{traceback.format_exc()}")
+            escalations = market_escalations(report["assessments"])
             with get_db() as db:
                 db.execute(
                     "INSERT OR REPLACE INTO market_reports VALUES (?,?,?,?)",
                     (doc_id, report["schema_version"], json.dumps(report),
                      datetime.datetime.utcnow().isoformat()),
                 )
+                if escalations:
+                    reason = market_escalation_reason(escalations)
+                    existing = db.execute(
+                        """SELECT item_id, reason FROM queue_items
+                           WHERE doc_id=? AND status='pending'
+                           ORDER BY rowid DESC LIMIT 1""",
+                        (doc_id,),
+                    ).fetchone()
+                    if existing:
+                        # Already escalated by the playbook — enrich its reason.
+                        if "Market Lens:" not in (existing["reason"] or ""):
+                            merged = (f"{existing['reason']}; {reason}"
+                                      if existing["reason"] else reason)
+                            db.execute("UPDATE queue_items SET reason=? WHERE item_id=?",
+                                       (merged, existing["item_id"]))
+                    else:
+                        qi = QueueItem(doc_id=doc_id, priority=2 * len(escalations),
+                                       reason=reason)
+                        db.execute(
+                            """INSERT OR REPLACE INTO queue_items
+                               (item_id, doc_id, priority, assignee, status, reason,
+                                created_at, attorney_notes)
+                               VALUES (?,?,?,?,?,?,?,?)""",
+                            (qi.item_id, qi.doc_id, qi.priority, qi.assignee,
+                             qi.status, qi.reason,
+                             datetime.datetime.utcnow().isoformat(), None),
+                        )
+            if escalations:
+                # Routing decisions belong in the audit trail.
+                AuditLog().append_simple(user_id, "market_lens_escalation", doc_id)
         except Exception:
             print(f"[market-lens] skipped for {doc_id}:\n{traceback.format_exc()}")
 

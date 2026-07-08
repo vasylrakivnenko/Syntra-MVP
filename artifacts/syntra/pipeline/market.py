@@ -9,12 +9,18 @@ Two responsibilities, nothing else:
      200-NDA market table (SQLite, offline, no API calls).
 
 run_market_lens() composes both into one JSON-serialisable report that the
-contract page renders. Everything here is ADVISORY statistical context —
-it never feeds routing or triage (the Off-Market Index is unvalidated;
-see market_lens's own caveats).
+contract page renders.
+
+Routing policy: raw statistical rarity NEVER routes (the Off-Market Index is
+unvalidated and flags something on most NDAs — see market_lens's own caveats).
+The only path to the attorney queue is assess_market_flags(): a cheap-model
+judgment that a flagged combination is unfavorable to OUR position and not
+already covered by the playbook analysis (see market_escalations()).
 """
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -38,6 +44,11 @@ MARKET_TABLE = Path(__file__).resolve().parent.parent / "market_data" / "market.
 
 # Extraction can time out on very long documents; cap the text we send.
 _MAX_DOC_CHARS = 60_000
+
+# Favorability assessment is high-volume/low-stakes → cheap model by default.
+LIGHT_MODEL = os.environ.get("LLM_LIGHT_MODEL", "gpt-5.4-mini")
+
+_FAVORABILITY_VALUES = ("favorable", "unfavorable", "neutral", "unclear")
 
 
 # ── extraction (via Syntra's LLM client) ─────────────────────────────────────
@@ -166,6 +177,93 @@ def score_market_row(row: dict[str, Any], meta: dict[str, Any] | None = None,
             "flagged": [c for c in contributions if c["off_market"]],
         },
     }
+
+
+# ── favorability assessment (cheap model, one batched call) ─────────────────
+
+_ASSESS_SYSTEM = """You are a senior commercial lawyer advising "our company" on an NDA.
+You will receive: (1) our perspective in this NDA, (2) issues our internal playbook
+analysis already raised, and (3) statistically unusual (off-market) clause
+combinations found in the NDA.
+
+For EACH numbered combination, judge:
+- favorability: "favorable" if the unusual terms work in our interest,
+  "unfavorable" if they increase our risk or burden, "neutral" if they cut both
+  ways or are immaterial, "unclear" if you cannot tell from the information given.
+- covered_by_playbook: true if the playbook findings already flag substantially
+  the same issue (same clause and same concern), else false.
+- rationale: one short sentence.
+
+Judge conservatively: only mark "unfavorable" when the combination plausibly harms
+our position. Statistical rarity alone is NOT unfavorable.
+
+Respond with JSON only:
+{"assessments": [{"index": 1, "favorability": "...", "covered_by_playbook": true, "rationale": "..."}]}"""
+
+
+def assess_market_flags(report: dict[str, Any], perspective: str,
+                        playbook_findings: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """Judge each flagged off-market combination from our side's point of view.
+
+    One batched call to the cheap model — returns one assessment per entry in
+    report["off_market"]["flagged"], each with favorability, covered_by_playbook
+    and a one-line rationale. Raises on failure; callers treat assessments as
+    optional enrichment."""
+    flagged = report.get("off_market", {}).get("flagged", [])
+    if not flagged:
+        return []
+    findings_txt = "\n".join(
+        f"- {f['clause_type']}: {f['status']} — {f['rationale']}".rstrip(" —")
+        for f in playbook_findings
+    ) or "(none — the playbook analysis raised no issues)"
+    combos_txt = "\n".join(
+        f"{i + 1}. {c['label']} (seen in {c['count']} of {c['n']} comparable NDAs)"
+        for i, c in enumerate(flagged)
+    )
+    user = (
+        f"Our perspective: {perspective} — mutual = both parties exchange confidential "
+        "information; recipient = we mainly receive it; discloser = we mainly disclose it.\n\n"
+        f"Playbook findings already raised:\n{findings_txt}\n\n"
+        f"Off-market clause combinations:\n{combos_txt}"
+    )
+    resp = get_client().chat.completions.create(
+        model=LIGHT_MODEL,
+        messages=[
+            {"role": "system", "content": _ASSESS_SYSTEM},
+            {"role": "user", "content": user},
+        ],
+        response_format={"type": "json_object"},
+    )
+    parsed = json.loads(resp.choices[0].message.content or "{}")
+    by_index = {a.get("index"): a for a in parsed.get("assessments", [])
+                if isinstance(a, dict)}
+    out = []
+    for i, c in enumerate(flagged):
+        a = by_index.get(i + 1, {})
+        fav = a.get("favorability")
+        out.append({
+            "label": c["label"],
+            "favorability": fav if fav in _FAVORABILITY_VALUES else "unclear",
+            "covered_by_playbook": bool(a.get("covered_by_playbook", False)),
+            "rationale": str(a.get("rationale", ""))[:300],
+        })
+    return out
+
+
+def market_escalations(assessments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The only combinations allowed to influence routing: judged against our
+    position AND not already covered by the playbook analysis."""
+    return [a for a in assessments
+            if a["favorability"] == "unfavorable" and not a["covered_by_playbook"]]
+
+
+def market_escalation_reason(escalations: list[dict[str, Any]]) -> str:
+    n = len(escalations)
+    shown = "; ".join(a["label"] for a in escalations[:2])
+    more = f" (+{n - 2} more)" if n > 2 else ""
+    return (f"Market Lens: {n} off-market term combination{'s' if n != 1 else ''} "
+            f"judged unfavorable to our position and not covered by the playbook "
+            f"— {shown}{more}")
 
 
 # ── composition ───────────────────────────────────────────────────────────────
