@@ -1,10 +1,17 @@
 {% extends "base.html" %}
+{% import "_chips.html" as chips %}
 {% block title %}Attorney Review — Syntra{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
-    <h3 class="fw-bold mb-0">Attorney Review</h3>
-    <small class="text-muted">Doc ID: <code>{{ item.doc_id }}</code></small>
+    <div class="d-flex align-items-center gap-2">
+      <h3 class="fw-bold mb-0">Attorney Review</h3>
+      {% set rl = risk_label(item.priority) %}
+      <span class="badge bg-{{ rl[1] }}">{{ rl[0] }}</span>
+      {{ chips.urgency_badge(item.urgency) }}
+      {{ chips.deadline_chip(item.needed_by) }}
+    </div>
+    <small class="text-muted">{{ item.filename or '' }} · Doc ID: <code>{{ item.doc_id }}</code></small>
     {% if item.reason %}
     <div><small class="text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>Escalated because: {{ item.reason }}</small></div>
     {% endif %}

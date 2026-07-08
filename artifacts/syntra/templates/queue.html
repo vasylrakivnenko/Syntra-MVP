@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_chips.html" as chips %}
 {% block title %}Review Queue — Syntra{% endblock %}
 {% block content %}
 <h3 class="fw-bold mb-1">Attorney Queue</h3>
@@ -14,22 +15,8 @@
         <h6 class="mb-0 fw-semibold">{{ item.filename }}</h6>
         {% set rl = risk_label(item.priority) %}
         <span class="badge bg-{{ rl[1] }}">{{ rl[0] }}</span>
-        {% if item.urgency == 'urgent' %}
-        <span class="badge bg-danger"><i class="bi bi-lightning-fill me-1"></i>Urgent</span>
-        {% elif item.urgency == 'high' %}
-        <span class="badge bg-warning text-dark">High urgency</span>
-        {% endif %}
-        {% if item.needed_by %}
-        {% set d = days_until(item.needed_by) %}
-        <span class="badge {{ 'bg-danger' if d is not none and d <= 1 else 'bg-light text-dark border' }}">
-          <i class="bi bi-calendar-event me-1"></i>
-          {%- if d is none %}Due {{ item.needed_by }}
-          {%- elif d < 0 %}Overdue ({{ item.needed_by }})
-          {%- elif d == 0 %}Due today
-          {%- elif d == 1 %}Due tomorrow
-          {%- else %}Due {{ item.needed_by }} ({{ d }}d){% endif %}
-        </span>
-        {% endif %}
+        {{ chips.urgency_badge(item.urgency) }}
+        {{ chips.deadline_chip(item.needed_by) }}
       </div>
       <small class="text-muted">
         Service: {{ (item.service_line or '—').replace('_',' ') | title }}

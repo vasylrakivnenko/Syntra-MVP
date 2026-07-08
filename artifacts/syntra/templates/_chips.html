@@ -1,0 +1,31 @@
+{# Shared urgency/deadline chips — single source of truth for how urgency renders. #}
+
+{% macro urgency_badge(urgency) -%}
+  {%- if urgency == 'urgent' -%}
+  <span class="badge bg-danger"><i class="bi bi-lightning-fill me-1"></i>Urgent</span>
+  {%- elif urgency == 'high' -%}
+  <span class="badge bg-warning text-dark">High urgency</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro deadline_chip(needed_by) -%}
+  {%- if needed_by -%}
+  {%- set d = days_until(needed_by) -%}
+  <span class="badge {{ 'bg-danger' if d is not none and d <= 1 else 'bg-light text-dark border' }}">
+    <i class="bi bi-calendar-event me-1"></i>
+    {%- if d is none %}Due {{ needed_by }}
+    {%- elif d < 0 %}Overdue ({{ needed_by }})
+    {%- elif d == 0 %}Due today
+    {%- elif d == 1 %}Due tomorrow
+    {%- else %}Due {{ needed_by }} ({{ d }}d){% endif %}
+  </span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro urgency_cell(urgency, needed_by) -%}
+  {%- if urgency in ('urgent', 'high') or needed_by -%}
+  {{ urgency_badge(urgency) }} {{ deadline_chip(needed_by) }}
+  {%- else -%}
+  <span class="text-muted small">Standard</span>
+  {%- endif -%}
+{%- endmacro %}

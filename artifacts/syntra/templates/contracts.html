@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_chips.html" as chips %}
 {% block title %}Contracts — Syntra{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -9,7 +10,7 @@
 <div class="card">
   <table class="table table-hover mb-0">
     <thead class="table-light">
-      <tr><th>File</th><th>Service line</th><th>Side</th><th>Status</th><th>Uploaded</th><th></th></tr>
+      <tr><th>File</th><th>Service line</th><th>Side</th><th>Status</th><th>Urgency</th><th>Uploaded</th><th></th></tr>
     </thead>
     <tbody>
     {% for d in docs %}
@@ -37,6 +38,7 @@
         <span class="badge bg-success"><i class="bi bi-check2-circle me-1"></i>Good to go</span>
         {% endif %}
       </td>
+      <td>{{ chips.urgency_cell(d.urgency, d.needed_by) }}</td>
       <td class="text-muted small">{{ d.uploaded_at[:10] if d.uploaded_at else '—' }}</td>
       <td><a href="/contracts/{{ d.doc_id }}" class="btn btn-sm btn-outline-secondary">View</a></td>
     </tr>

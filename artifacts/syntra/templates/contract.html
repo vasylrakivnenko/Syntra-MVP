@@ -1,12 +1,15 @@
 {% extends "base.html" %}
+{% import "_chips.html" as chips %}
 {% block title %}Contract Review — Syntra{% endblock %}
 {% block content %}
 
 {# ── header ── #}
 <div class="d-flex justify-content-between align-items-start mb-3">
   <div>
-    <h3 class="fw-bold mb-0">{{ doc.filename }}</h3>
-    <small class="text-muted">
+    <h3 class="fw-bold mb-0 d-inline-block me-2">{{ doc.filename }}</h3>
+    {{ chips.urgency_badge(doc.urgency) }}
+    {{ chips.deadline_chip(doc.needed_by) }}
+    <small class="text-muted d-block">
       Service:&nbsp;<strong>{{ (doc.service_line or '—').replace('_',' ') | title }}</strong>
       &nbsp;·&nbsp;Side:&nbsp;<strong>{{ side_display(doc.service_line, doc.side) }}</strong>
       {% if our_party %}

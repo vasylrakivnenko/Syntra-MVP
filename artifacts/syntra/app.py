@@ -764,7 +764,12 @@ def review(item_id):
         flash(f"Contract {decision}.")
         return redirect(url_for("queue"))
     with get_db() as db:
-        item = db.execute("SELECT * FROM queue_items WHERE item_id=?", (item_id,)).fetchone()
+        item = db.execute(
+            """SELECT q.*, d.filename, d.urgency, d.needed_by
+               FROM queue_items q JOIN documents d ON q.doc_id = d.doc_id
+               WHERE q.item_id=?""",
+            (item_id,),
+        ).fetchone()
         if not item:
             abort(404)
         rows = db.execute(
