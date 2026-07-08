@@ -3,14 +3,9 @@ name = "repl-nix-workspace"
 version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.11"
-dependencies = [
-    "flask>=3.1",
-    "openai>=2.0",
-    "pydantic>=2.0",
-    "python-docx>=1.2",
-    "pdfplumber>=0.11",
-    "agentic-doc>=0.3",
-    "langchain-text-splitters>=1.0",
-    "rank-bm25>=0.2",
-    "pyyaml>=6.0",
-]
+# NOTE: runtime deps intentionally NOT declared here — the publish pipeline runs
+# `uv sync`, which cannot install into this workspace's .pythonlibs (not a venv)
+# and fails the build. Packages live pre-installed in .pythonlibs.
+# Runtime imports: flask, openai, pydantic, python-docx, pdfplumber, agentic-doc,
+# langchain-text-splitters, rank-bm25, pyyaml.
+dependencies = []

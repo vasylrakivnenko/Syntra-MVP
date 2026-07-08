@@ -24,6 +24,7 @@ args = [ "python3", "artifacts/syntra/app.py" ]
 
 [services.production.run.env]
 PORT = "5000"
+PYTHONUSERBASE = "/home/runner/workspace/.pythonlibs"
 
 [services.production.health.startup]
 path = "/healthz"

@@ -1,6 +1,6 @@
 - [Python artifact registration](python-artifact-registration.md) — register Flask apps in the monorepo: createArtifact first, then verifyAndReplaceArtifactToml; keep integratedSkills unchanged.
 - [Legal clause segmentation](legal-clause-segmentation.md) — Syntra splits contracts via LLM-returned verbatim anchors; regex/paragraph are no-key fallbacks.
 - [Syntra playbook lookup coupling](syntra-playbook-lookup.md) — Segmenter's service_line must be a real playbook row id or every clause abstains; lookup falls back to general_<side>.
-- [Python deps & deploy quirks](python-deps-and-deploy.md) — uv can't install into .pythonlibs (edit pyproject + `uv lock` only); scaffolded artifact.toml ships no production run command → published app 500s.
+- [Python deps & deploy quirks](python-deps-and-deploy.md) — pyproject deps MUST stay [] (publish runs uv sync → os error 13); prod run env needs PYTHONUSERBASE=.pythonlibs.
 - [SQLite audit lock + Jinja .items](syntra-sqlite-audit-lock.md) — never audit inside an open get_db write transaction (single-writer lock); never use `items` as a Jinja dict key.
 - [Syntra Market Lens integration](syntra-market-lens.md) — vendored lib untouched, single adapter seam, advisory-only (v1 off-market index saturates; never route on it).
