@@ -5,6 +5,18 @@
       "username": "John Doe",
       "role": "owner",
       "created_at": "2026-07-07T18:06:40.182545"
+    },
+    {
+      "user_id": "670f7d14bfb9",
+      "username": "smoketest",
+      "role": "owner",
+      "created_at": "2026-07-07T20:47:30.049673"
+    },
+    {
+      "user_id": "e942fb418390",
+      "username": "archsmoke",
+      "role": "attorney",
+      "created_at": "2026-07-07T22:11:53.769244"
     }
   ],
   "playbooks": []

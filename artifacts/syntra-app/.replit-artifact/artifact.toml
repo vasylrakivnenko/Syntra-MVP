@@ -18,9 +18,15 @@ localPort = 5000
 run = "python3 /home/runner/workspace/artifacts/syntra/app.py"
 
 [services.production]
-build = [ "python3", "-c", "print('no build step')" ]
-publicDir = ""
-serve = "proxy"
+
+[services.production.run]
+args = [ "python3", "artifacts/syntra/app.py" ]
+
+[services.production.run.env]
+PORT = "5000"
+
+[services.production.health.startup]
+path = "/healthz"
 
 [services.env]
 PORT = "5000"

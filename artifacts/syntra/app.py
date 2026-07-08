@@ -358,6 +358,11 @@ def inject_inbox():
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
+@app.route("/healthz")
+def healthz():
+    return {"status": "ok"}, 200
+
+
 @app.route("/")
 @login_required
 def index():
