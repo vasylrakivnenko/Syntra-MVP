@@ -9,6 +9,7 @@
       <h3 class="fw-bold mb-0">Attorney Review</h3>
       {% set rl = risk_label(item.priority) %}
       <span class="badge bg-{{ rl[1] }}">{{ rl[0] }}</span>
+      {{ chips.version_badge(item.version) }}
       {{ chips.urgency_badge(item.urgency) }}
       {{ chips.deadline_chip(item.needed_by) }}
     </div>
@@ -70,6 +71,19 @@
 
   {# ── decision panel ── #}
   <div class="col-lg-4">
+    {% if prior_review %}
+    <div class="alert {{ 'alert-danger' if prior_review.status == 'rejected' else 'alert-success' }} py-2 mb-3">
+      <small>
+        <strong><i class="bi bi-clock-history me-1"></i>Previous version (v{{ prior_review.version }}) was {{ prior_review.status }}</strong>
+        {%- if prior_review.reviewed_by %} by {{ prior_review.reviewed_by }}{% endif %}
+        {%- if prior_review.reviewed_at %} on {{ prior_review.reviewed_at[:10] }}{% endif %}.
+        {% if prior_review.attorney_notes %}
+        <span class="d-block mt-1 fst-italic">&ldquo;{{ prior_review.attorney_notes }}&rdquo;</span>
+        {% endif %}
+        <a href="/contracts/{{ prior_review.doc_id }}" class="d-inline-block mt-1">View v{{ prior_review.version }} →</a>
+      </small>
+    </div>
+    {% endif %}
     <div class="card sticky-top" style="top:80px;">
       <div class="card-header fw-semibold bg-dark text-white">Decision</div>
       <div class="card-body">

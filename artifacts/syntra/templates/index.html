@@ -58,7 +58,7 @@
     <tbody>
     {% for d in docs %}
     <tr class="cursor-pointer" onclick="window.location='/contracts/{{ d.doc_id }}'">
-      <td class="fw-semibold">{{ d.filename }}</td>
+      <td class="fw-semibold">{{ d.filename }} {{ chips.version_badge(d.version) }}</td>
       <td>{{ service_line_display(d.service_line) }}</td>
       <td>{{ chips.side_pill(side_display(d.service_line, d.side)) }}</td>
       <td>{{ chips.status_badge(d) }}</td>

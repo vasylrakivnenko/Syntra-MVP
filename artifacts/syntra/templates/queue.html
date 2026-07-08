@@ -12,7 +12,7 @@
   <div class="d-flex justify-content-between align-items-center">
     <div>
       <div class="d-flex align-items-center gap-2 mb-1">
-        <h6 class="mb-0 fw-semibold">{{ item.filename }}</h6>
+        <h6 class="mb-0 fw-semibold">{{ item.filename }} {{ chips.version_badge(item.version) }}</h6>
         {% set rl = risk_label(item.priority) %}
         <span class="badge bg-{{ rl[1] }}">{{ rl[0] }}</span>
         {{ chips.urgency_chip(item.urgency, item.needed_by) }}

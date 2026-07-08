@@ -8,6 +8,7 @@
 <div class="d-flex justify-content-between align-items-start mb-3">
   <div>
     <h3 class="fw-bold mb-0 d-inline-block me-2">{{ doc.filename }}</h3>
+    {{ chips.version_badge(doc.version) }}
     {{ chips.urgency_badge(doc.urgency) }}
     {{ chips.deadline_chip(doc.needed_by) }}
     <small class="text-muted d-block">
@@ -32,8 +33,16 @@
   </div>
 </div>
 
-{# ── review routing banner ── #}
-{% if queue_item and queue_item.status == 'pending' %}
+{# ── review routing banner — superseded takes precedence over everything ── #}
+{% if not is_latest %}
+<div class="alert alert-secondary d-flex justify-content-between align-items-center py-2 mb-3">
+  <span><i class="bi bi-layers me-1"></i><strong>Superseded</strong> —
+    this is version {{ doc.version or 1 }} of this case; v{{ latest.version }} has replaced it.
+    Statuses and redlines below are historical.</span>
+  <a href="/contracts/{{ latest.doc_id }}" class="btn btn-sm btn-outline-dark text-nowrap ms-3">
+    View latest (v{{ latest.version }}) →</a>
+</div>
+{% elif queue_item and queue_item.status == 'pending' %}
 <div class="alert alert-warning d-flex justify-content-between align-items-center py-2 mb-3">
   <span><i class="bi bi-person-exclamation me-1"></i><strong>Escalated to attorney review</strong> — {{ queue_item.reason or 'findings' }} — attorney sign-off required before this contract can proceed.</span>
   <a href="/queue" class="btn btn-sm btn-outline-dark text-nowrap ms-3">View queue →</a>
@@ -50,11 +59,70 @@
   <i class="bi bi-x-circle me-1"></i><strong>Rejected by attorney</strong>
   {%- if queue_item.reviewed_by %} ({{ queue_item.reviewed_by }}{% if queue_item.reviewed_at %}, {{ queue_item.reviewed_at[:10] }}{% endif %}){% endif %}
   {%- if queue_item.attorney_notes %} — {{ queue_item.attorney_notes }}{% endif %}
-  <div class="small mt-1"><strong>Next step:</strong> address the attorney's notes with the counterparty, then upload the revised version — Syntra will re-run the full analysis.</div>
+  <div class="small mt-1"><strong>Next step:</strong> address the attorney's notes with the counterparty, then
+    <a href="/upload?case={{ doc.case_id }}" class="alert-link">upload the revised version →</a>
+    Syntra will re-run the full analysis and retire this review.</div>
 </div>
 {% elif doc.status == 'processed' %}
 <div class="alert alert-success py-2 mb-3">
   <i class="bi bi-check2-circle me-1"></i><strong>Good to go</strong> — no findings met the escalation threshold; attorney review not required.
+</div>
+{% endif %}
+
+{# ── version history ── #}
+{% if versions and versions|length > 1 %}
+<div class="card mb-4">
+  <div class="card-header fw-semibold">
+    <i class="bi bi-clock-history me-1"></i>Version History
+    <span class="text-muted fw-normal small ms-1">— changes are analysis comparisons, not text diffs</span>
+  </div>
+  <ul class="list-group list-group-flush">
+    {% for v in versions | reverse %}
+    <li class="list-group-item px-3 py-2 {{ 'bg-light' if v.doc_id == doc.doc_id }}">
+      <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+        <div>
+          <span class="badge {{ 'bg-dark' if loop.first else 'bg-secondary' }}">v{{ v.version }}</span>
+          {% if loop.first %}<span class="badge border border-info-subtle bg-info-subtle text-info-emphasis">current</span>{% endif %}
+          <span class="fw-semibold ms-1">{{ v.filename }}</span>
+          {% if v.doc_id == doc.doc_id %}<span class="text-muted small">(viewing)</span>{% endif %}
+          <small class="text-muted d-block mt-1">
+            Uploaded {{ v.uploaded_at[:10] if v.uploaded_at }} by {{ v.uploader or '—' }} ·
+            {%- if v.status == 'error' %} analysis failed
+            {%- elif v.status != 'processed' %} {{ v.status | replace('_',' ') }}
+            {%- elif v.review_status == 'pending' %} awaiting attorney review
+            {%- elif v.review_status %} {{ v.review_status }} by attorney
+            {%- else %} auto-cleared{% endif %}
+          </small>
+          {% set ch = version_changes.get(v.doc_id) %}
+          {% if ch %}
+          <small class="d-block mt-1">
+            <span class="{{ 'text-danger fw-semibold' if ch.new else 'text-muted' }}">{{ ch.new|length }} new</span> ·
+            <span class="{{ 'text-success fw-semibold' if ch.resolved else 'text-muted' }}">{{ ch.resolved|length }} resolved</span> ·
+            <span class="text-muted">{{ ch.still_open }} still open</span>
+            <span class="text-muted">vs previous version</span>
+          </small>
+          {% if ch.new %}
+          <small class="d-block text-danger-emphasis">
+            <i class="bi bi-plus-circle me-1"></i>New: {{ ch.new[:4] | join('; ') }}{% if ch.new|length > 4 %} +{{ ch.new|length - 4 }} more{% endif %}
+          </small>
+          {% endif %}
+          {% if ch.resolved %}
+          <small class="d-block text-success-emphasis">
+            <i class="bi bi-check-circle me-1"></i>Resolved: {{ ch.resolved[:4] | join('; ') }}{% if ch.resolved|length > 4 %} +{{ ch.resolved|length - 4 }} more{% endif %}
+          </small>
+          {% endif %}
+          {% endif %}
+        </div>
+        <div class="text-nowrap">
+          {{ chips.urgency_chip(v.urgency, v.needed_by) }}
+          {% if v.doc_id != doc.doc_id %}
+          <a href="/contracts/{{ v.doc_id }}" class="btn btn-sm btn-outline-secondary ms-1">View</a>
+          {% endif %}
+        </div>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
 </div>
 {% endif %}
 

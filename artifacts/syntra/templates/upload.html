@@ -11,6 +11,42 @@
     <div class="card">
       <div class="card-body p-4">
         <form method="POST" enctype="multipart/form-data" id="upload-form">
+          {% if cases %}
+          <div class="mb-3">
+            <label class="form-label fw-semibold mb-1">What are you uploading?</label>
+            <div class="btn-group w-100" role="group">
+              <input type="radio" class="btn-check" name="mode" id="mode-new" value="new"
+                     {{ 'checked' if not preselect_case }}>
+              <label class="btn btn-outline-secondary" for="mode-new">
+                <i class="bi bi-file-earmark-plus me-1"></i>New contract
+              </label>
+              <input type="radio" class="btn-check" name="mode" id="mode-version" value="version"
+                     {{ 'checked' if preselect_case }}>
+              <label class="btn btn-outline-secondary" for="mode-version">
+                <i class="bi bi-layers me-1"></i>New version of an existing one
+              </label>
+            </div>
+          </div>
+          <div class="mb-3 {{ '' if preselect_case else 'd-none' }}" id="case-select-wrap">
+            <label class="form-label fw-semibold mb-1">Which contract is this a new version of?</label>
+            <select class="form-select" name="parent_case_id" id="case-select">
+              <option value="">Select a contract…</option>
+              {% for c in cases %}
+              <option value="{{ c.case_id }}" {{ 'selected' if c.case_id == preselect_case }}>
+                {{ c.filename }} · v{{ c.version }} ·
+                {%- if c.status == 'error' %} analysis failed
+                {%- elif c.review_status == 'pending' %} awaiting attorney
+                {%- elif c.review_status %} {{ c.review_status }}
+                {%- else %} auto-cleared{% endif %} · {{ c.uploaded_at[:10] if c.uploaded_at }}
+              </option>
+              {% endfor %}
+            </select>
+            <div class="form-text">
+              The file becomes the case's next version and is fully re-analysed.
+              Any stale pending attorney review of the old version is retired automatically.
+            </div>
+          </div>
+          {% endif %}
           <div class="mb-4">
             <label class="form-label fw-semibold">Contract file</label>
             <input type="file" class="form-control form-control-lg"
@@ -54,5 +90,17 @@
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Uploading…';
   });
+  // Show the case picker only in "new version" mode; require a choice there.
+  const modeVersion = document.getElementById("mode-version");
+  if (modeVersion) {
+    const wrap = document.getElementById("case-select-wrap");
+    const sel = document.getElementById("case-select");
+    const sync = () => {
+      wrap.classList.toggle("d-none", !modeVersion.checked);
+      sel.required = modeVersion.checked;
+    };
+    document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener("change", sync));
+    sync();
+  }
 </script>
 {% endblock %}

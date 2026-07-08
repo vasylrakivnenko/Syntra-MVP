@@ -50,6 +50,14 @@
   {%- endif -%}
 {%- endmacro %}
 
+{# ── case version badge — only interesting from v2 up ── #}
+{% macro version_badge(version) -%}
+  {%- if version and version > 1 -%}
+  <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle"
+        title="Version {{ version }} of this case">v{{ version }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
 {# ── neutral gray outline pill for metadata (side/recipient/mutual/discloser) ── #}
 {% macro side_pill(side) -%}
   <span class="badge rounded-pill border border-secondary-subtle text-secondary-emphasis bg-white">{{ side }}</span>

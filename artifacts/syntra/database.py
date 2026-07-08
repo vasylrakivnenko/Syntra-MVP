@@ -118,6 +118,8 @@ def init_db():
             "ALTER TABLE documents ADD COLUMN our_party TEXT",
             "ALTER TABLE documents ADD COLUMN urgency TEXT",
             "ALTER TABLE documents ADD COLUMN needed_by TEXT",
+            "ALTER TABLE documents ADD COLUMN case_id TEXT",
+            "ALTER TABLE documents ADD COLUMN version INTEGER",
             "ALTER TABLE queue_items ADD COLUMN reviewed_at TEXT",
             "ALTER TABLE queue_items ADD COLUMN reviewed_by TEXT",
             "ALTER TABLE queue_items ADD COLUMN acknowledged_at TEXT",
@@ -127,6 +129,14 @@ def init_db():
                 conn.execute(stmt)
             except sqlite3.OperationalError:
                 pass  # column already exists
+        # Versioning backfill (idempotent): pre-versioning rows each become
+        # their own single-version case.
+        conn.execute(
+            "UPDATE documents SET case_id=doc_id, version=1 WHERE case_id IS NULL"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_documents_case_id ON documents(case_id)"
+        )
 
 
 def seed_from_file():

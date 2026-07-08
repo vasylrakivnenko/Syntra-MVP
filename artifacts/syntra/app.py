@@ -9,6 +9,7 @@ import threading
 import traceback
 from pathlib import Path
 from functools import wraps
+from collections import Counter
 from flask import (
     Flask, session, redirect, url_for, request,
     render_template, flash, send_file, abort, jsonify,
@@ -497,6 +498,8 @@ _DOCS_QUERY = """
                AND ((v.branch = 'verdict' AND v.status != 'complies') OR v.branch = 'silence')
            ) AS risk_flags
     FROM documents d
+    WHERE d.version = (SELECT MAX(d2.version) FROM documents d2
+                        WHERE d2.case_id = d.case_id)
 """
 
 
@@ -548,18 +551,57 @@ def logout():
     return redirect(url_for("login"))
 
 
+def _eligible_cases():
+    """Latest version per case that has finished analysis — the valid targets
+    for a new-version upload. In-flight cases (processing/awaiting_party) are
+    excluded so a running pipeline is never raced."""
+    with get_db() as db:
+        return db.execute(
+            """SELECT d.doc_id, d.case_id, d.version, d.filename, d.uploaded_at,
+                      d.status,
+                      (SELECT q.status FROM queue_items q
+                        WHERE q.doc_id = d.doc_id AND q.status != 'superseded'
+                        ORDER BY q.rowid DESC LIMIT 1) AS review_status
+               FROM documents d
+               WHERE d.status IN ('processed', 'error')
+                 AND d.version = (SELECT MAX(d2.version) FROM documents d2
+                                   WHERE d2.case_id = d.case_id)
+               ORDER BY d.uploaded_at DESC"""
+        ).fetchall()
+
+
+def _escalate_urgency(doc_row, urgency, needed_by):
+    """Merge urgency/deadline onto an existing doc — escalate, never
+    downgrade. Returns True if anything changed."""
+    rank = {"standard": 0, "high": 1, "urgent": 2}
+    new_urgency = (urgency if rank.get(urgency, 0) > rank.get(doc_row["urgency"] or "standard", 0)
+                   else doc_row["urgency"])
+    new_deadline = (min(filter(None, (needed_by, doc_row["needed_by"])))
+                    if (needed_by or doc_row["needed_by"]) else None)
+    if (new_urgency, new_deadline) == (doc_row["urgency"], doc_row["needed_by"]):
+        return False
+    with get_db() as db:
+        db.execute("UPDATE documents SET urgency=?, needed_by=? WHERE doc_id=?",
+                   (new_urgency, new_deadline, doc_row["doc_id"]))
+    return True
+
+
 @app.route("/upload", methods=["GET", "POST"])
 @login_required
 def upload():
     if request.method == "POST":
+        def form_again():
+            return render_template(
+                "upload.html", user=current_user(), cases=_eligible_cases(),
+                preselect_case=request.form.get("parent_case_id", ""))
         f = request.files.get("contract")
         if not f or not f.filename:
             flash("No file selected.")
-            return render_template("upload.html", user=current_user())
+            return form_again()
         ext = f.filename.rsplit(".", 1)[-1].lower()
         if ext not in ("docx", "pdf"):
             flash("Only .docx and .pdf files are supported.")
-            return render_template("upload.html", user=current_user())
+            return form_again()
         urgency = request.form.get("urgency", "standard")
         if urgency not in ("standard", "high", "urgent"):
             urgency = "standard"
@@ -571,35 +613,59 @@ def upload():
                 needed_by = None
         file_bytes = f.read()
         content_hash = hashlib.sha256(file_bytes).hexdigest()
-        # Same file already analysed (or in flight)? Reuse it instead of
-        # creating a duplicate document + a duplicate pipeline run.
-        with get_db() as db:
-            dup = db.execute(
-                """SELECT doc_id, status, urgency, needed_by FROM documents
-                   WHERE content_hash=? AND status IN ('processing','processed','awaiting_party')
-                   ORDER BY uploaded_at DESC LIMIT 1""",
-                (content_hash,),
-            ).fetchone()
+        mode = request.form.get("mode", "new")
+        parent = None
+        if mode == "version":
+            # ── new version of an existing case ──
+            parent_case_id = request.form.get("parent_case_id", "").strip()
+            with get_db() as db:
+                parent = db.execute(
+                    """SELECT * FROM documents
+                       WHERE case_id=? AND version = (SELECT MAX(version) FROM documents
+                                                       WHERE case_id=?)""",
+                    (parent_case_id, parent_case_id),
+                ).fetchone()
+            # Server-side eligibility check — the dropdown can be stale.
+            if not parent or parent["status"] not in ("processed", "error"):
+                flash("Pick which contract this file is a new version of — the case "
+                      "must have finished its previous analysis first.")
+                return form_again()
+            if parent["content_hash"] == content_hash:
+                # Identical to the case's current version — no new version;
+                # reuse the escalate-never-downgrade urgency semantics.
+                if _escalate_urgency(parent, urgency, needed_by):
+                    flash(f"This file is identical to the current version (v{parent['version']}) "
+                          "— updated its urgency/deadline instead of creating a new version.")
+                else:
+                    flash(f"This file is identical to the current version (v{parent['version']}) "
+                          "— showing the existing analysis.")
+                session["mvp_notice"] = True
+                return redirect(url_for("contract", doc_id=parent["doc_id"]))
+        else:
+            # ── new contract: global same-file dedupe. Re-uploading the same
+            # file as a NEW contract stays the intentional escape hatch to
+            # escalate urgency on an existing one — never downgrade. ──
+            with get_db() as db:
+                # Only match each case's LATEST version — redirecting into a
+                # superseded page (hidden from every list) would strand the user.
+                dup = db.execute(
+                    """SELECT doc_id, status, urgency, needed_by FROM documents
+                       WHERE content_hash=? AND status IN ('processing','processed','awaiting_party')
+                         AND version = (SELECT MAX(version) FROM documents d2
+                                        WHERE d2.case_id = documents.case_id)
+                       ORDER BY uploaded_at DESC LIMIT 1""",
+                    (content_hash,),
+                ).fetchone()
             if dup:
-                # Re-uploading the same file is the only way to flag an existing
-                # contract as more urgent — escalate, never downgrade.
-                rank = {"standard": 0, "high": 1, "urgent": 2}
-                new_urgency = (urgency if rank.get(urgency, 0) > rank.get(dup["urgency"] or "standard", 0)
-                               else dup["urgency"])
-                new_deadline = (min(filter(None, (needed_by, dup["needed_by"])))
-                                if (needed_by or dup["needed_by"]) else None)
-                if (new_urgency, new_deadline) != (dup["urgency"], dup["needed_by"]):
-                    db.execute("UPDATE documents SET urgency=?, needed_by=? WHERE doc_id=?",
-                               (new_urgency, new_deadline, dup["doc_id"]))
+                if _escalate_urgency(dup, urgency, needed_by):
                     flash("This exact file has already been analysed — updated its "
                           "urgency/deadline and showing the existing analysis.")
                 else:
                     flash("This exact file has already been analysed — showing the existing analysis.")
-        if dup:
-            session["mvp_notice"] = True
-            target = {"processing": "processing",
-                      "awaiting_party": "select_party"}.get(dup["status"], "contract")
-            return redirect(url_for(target, doc_id=dup["doc_id"]))
+                session["mvp_notice"] = True
+                target = {"processing": "processing",
+                          "awaiting_party": "select_party"}.get(dup["status"], "contract")
+                return redirect(url_for(target, doc_id=dup["doc_id"]))
         doc_id = hashlib.md5(
             (f.filename + str(datetime.datetime.utcnow())).encode()
         ).hexdigest()[:12]
@@ -619,21 +685,63 @@ def upload():
         except Exception:
             print(f"[parties] inference failed for {doc_id}:\n{traceback.format_exc()}")
         awaiting = len(parties) >= 2
+        now = datetime.datetime.utcnow().isoformat()
         # Insert the document row immediately so the next page can find it
         with get_db() as db:
-            db.execute(
-                """INSERT OR REPLACE INTO documents
-                   (doc_id, source_type, status, side, service_line,
-                    uploaded_by, uploaded_at, filename, content_hash, parties_json,
-                    urgency, needed_by)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (doc_id, source_type,
-                 "awaiting_party" if awaiting else "processing",
-                 None, None, user["user_id"],
-                 datetime.datetime.utcnow().isoformat(), f.filename, content_hash,
-                 json.dumps(parties) if parties else None,
-                 urgency, needed_by),
-            )
+            if parent is not None:
+                # Version number is assigned inside the INSERT so two
+                # concurrent uploads to the same case can't collide.
+                db.execute(
+                    """INSERT OR REPLACE INTO documents
+                       (doc_id, source_type, status, side, service_line,
+                        uploaded_by, uploaded_at, filename, content_hash, parties_json,
+                        urgency, needed_by, case_id, version)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,
+                               (SELECT COALESCE(MAX(version),0)+1 FROM documents WHERE case_id=?))""",
+                    (doc_id, source_type,
+                     "awaiting_party" if awaiting else "processing",
+                     None, None, user["user_id"], now, f.filename, content_hash,
+                     json.dumps(parties) if parties else None,
+                     urgency, needed_by, parent["case_id"], parent["case_id"]),
+                )
+                # Retire stale attorney work: prior versions' pending reviews
+                # vanish from the queue; the new analysis re-routes on its own.
+                db.execute(
+                    """UPDATE queue_items SET status='superseded'
+                       WHERE status='pending'
+                         AND doc_id IN (SELECT doc_id FROM documents
+                                         WHERE case_id=? AND doc_id != ?)""",
+                    (parent["case_id"], doc_id),
+                )
+                # Uploading a revision answers the decision — clear the
+                # operator's unacknowledged-decision bell for this case.
+                db.execute(
+                    """UPDATE queue_items SET acknowledged_at=?
+                       WHERE acknowledged_at IS NULL AND status IN ('approved','rejected')
+                         AND doc_id IN (SELECT doc_id FROM documents WHERE case_id=?)""",
+                    (now, parent["case_id"]),
+                )
+            else:
+                db.execute(
+                    """INSERT OR REPLACE INTO documents
+                       (doc_id, source_type, status, side, service_line,
+                        uploaded_by, uploaded_at, filename, content_hash, parties_json,
+                        urgency, needed_by, case_id, version)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+                    (doc_id, source_type,
+                     "awaiting_party" if awaiting else "processing",
+                     None, None, user["user_id"], now, f.filename, content_hash,
+                     json.dumps(parties) if parties else None,
+                     urgency, needed_by, doc_id),
+                )
+        if parent is not None:
+            try:  # audit AFTER the write block commits (SQLite single-writer)
+                AuditLog().append_simple(
+                    user["user_id"], "version_uploaded",
+                    f"{parent['case_id']}:{doc_id}",
+                )
+            except Exception:
+                pass  # never block an upload on audit enrichment
         # Arm the one-shot MVP disclaimer popup for the next page render.
         session["mvp_notice"] = True
         if awaiting:
@@ -646,7 +754,9 @@ def upload():
         )
         t.start()
         return redirect(url_for("processing", doc_id=doc_id))
-    return render_template("upload.html", user=current_user())
+    return render_template("upload.html", user=current_user(),
+                           cases=_eligible_cases(),
+                           preselect_case=request.args.get("case", ""))
 
 
 @app.route("/contracts/<doc_id>/select-party", methods=["GET", "POST"])
@@ -745,6 +855,52 @@ def contracts():
     return render_template("contracts.html", docs=docs, user=current_user(), sort_mode=sort_mode)
 
 
+def _issue_counter(db, doc_id):
+    """Multiset of a doc's open findings, keyed by human-readable label — the
+    unit of comparison for the version-history changes summary."""
+    rows = db.execute(
+        """SELECT v.branch, v.status, v.reason, cl.clause_type
+           FROM verdicts v
+           LEFT JOIN classifications cl ON v.clause_id = cl.clause_id
+           WHERE v.doc_id=?
+             AND (v.branch='silence' OR (v.branch='verdict' AND v.status != 'complies'))""",
+        (doc_id,),
+    ).fetchall()
+    counts = Counter()
+    for r in rows:
+        if r["branch"] == "silence":
+            label = f"Missing: {(r['reason'] or 'required clause').strip()}"
+        else:
+            ctype = (r["clause_type"] or "clause").replace("_", " ").title()
+            status = (r["status"] or "").replace("_", " ")
+            label = f"{ctype} — {status}"
+        counts[label] += 1
+    return counts
+
+
+def _version_changes(db, versions):
+    """Analysis-comparison summary between consecutive processed versions:
+    {doc_id: {new: [labels], resolved: [labels], still_open: int}}. This is a
+    comparison of pipeline findings, not a text diff."""
+    changes = {}
+    if len(versions) < 2:
+        return changes
+    prev = None
+    for v in versions:
+        if v["status"] != "processed":
+            continue  # diff against the nearest prior *processed* version
+        cur = _issue_counter(db, v["doc_id"])
+        if prev is not None:
+            new, resolved = cur - prev, prev - cur
+            changes[v["doc_id"]] = {
+                "new": sorted(new.elements()),
+                "resolved": sorted(resolved.elements()),
+                "still_open": sum((cur & prev).values()),
+            }
+        prev = cur
+    return changes
+
+
 @app.route("/contracts/<doc_id>")
 @login_required
 def contract(doc_id):
@@ -788,6 +944,17 @@ def contract(doc_id):
         mr = db.execute(
             "SELECT report_json FROM market_reports WHERE doc_id=?", (doc_id,)
         ).fetchone()
+        versions = db.execute(
+            """SELECT d.doc_id, d.version, d.filename, d.uploaded_at, d.status,
+                      d.urgency, d.needed_by, u.username AS uploader,
+                      (SELECT q.status FROM queue_items q
+                        WHERE q.doc_id = d.doc_id AND q.status != 'superseded'
+                        ORDER BY q.rowid DESC LIMIT 1) AS review_status
+               FROM documents d LEFT JOIN users u ON u.user_id = d.uploaded_by
+               WHERE d.case_id=? ORDER BY d.version ASC""",
+            (doc["case_id"],),
+        ).fetchall()
+        version_changes = _version_changes(db, versions)
     market = None
     if mr:
         try:
@@ -801,9 +968,13 @@ def contract(doc_id):
         except Exception:
             our_party = None
     redline_available = (UPLOADS / f"{doc_id}_redline.docx").exists()
+    latest = versions[-1] if versions else None
+    is_latest = (latest is None) or (latest["doc_id"] == doc["doc_id"])
     return render_template("contract.html", doc=doc, verdicts=verdicts, queue_item=queue_item,
                            market=market, our_party=our_party,
-                           redline_available=redline_available, user=current_user())
+                           redline_available=redline_available, user=current_user(),
+                           versions=versions, version_changes=version_changes,
+                           latest=latest, is_latest=is_latest)
 
 
 @app.route("/contracts/<doc_id>/redline-preview")
@@ -904,7 +1075,7 @@ def playbook_ai():
 def queue():
     with get_db() as db:
         items = db.execute(
-            """SELECT q.*, d.filename, d.service_line, d.side, d.urgency, d.needed_by
+            """SELECT q.*, d.filename, d.service_line, d.side, d.urgency, d.needed_by, d.version
                FROM queue_items q JOIN documents d ON q.doc_id=d.doc_id
                WHERE q.status='pending'
                ORDER BY CASE d.urgency WHEN 'urgent' THEN 2 WHEN 'high' THEN 1 ELSE 0 END DESC,
@@ -929,15 +1100,24 @@ def review(item_id):
             ).fetchone()
             if not item:
                 abort(404)
-            # acknowledged_at resets to NULL so a re-review re-notifies the operator.
-            db.execute(
+            # Guard against a stale review page: only a still-pending item may
+            # be decided. If a new version superseded it mid-review, this
+            # UPDATE matches nothing and we must NOT resurrect the dead item
+            # (acknowledged_at=NULL would re-light the operator's bell for a
+            # version that no longer matters).
+            cur = db.execute(
                 """UPDATE queue_items
                    SET status=?, attorney_notes=?, reviewed_at=?, reviewed_by=?,
                        acknowledged_at=NULL
-                   WHERE item_id=?""",
+                   WHERE item_id=? AND status='pending'""",
                 (decision, notes, datetime.datetime.utcnow().isoformat(),
                  current_user()["username"], item_id),
             )
+            decided = cur.rowcount > 0
+        if not decided:
+            flash("This review was superseded by a newer version of the contract "
+                  "— your decision was not recorded. The new version re-routes on its own.")
+            return redirect(url_for("queue"))
         # Audit outside the transaction: AuditLog opens its own connection,
         # and SQLite allows only one writer at a time.
         AuditLog().append_simple(
@@ -947,7 +1127,7 @@ def review(item_id):
         return redirect(url_for("queue"))
     with get_db() as db:
         item = db.execute(
-            """SELECT q.*, d.filename, d.urgency, d.needed_by
+            """SELECT q.*, d.filename, d.urgency, d.needed_by, d.version, d.case_id
                FROM queue_items q JOIN documents d ON q.doc_id = d.doc_id
                WHERE q.item_id=?""",
             (item_id,),
@@ -962,8 +1142,21 @@ def review(item_id):
                WHERE v.doc_id=? ORDER BY v.risk_weight DESC""",
             (item["doc_id"],),
         ).fetchall()
+        # Context for re-reviews: the most recent decision on a prior version.
+        prior_review = None
+        if (item["version"] or 1) > 1:
+            prior_review = db.execute(
+                """SELECT q.status, q.attorney_notes, q.reviewed_by, q.reviewed_at,
+                          d.version, d.doc_id
+                   FROM queue_items q JOIN documents d ON d.doc_id = q.doc_id
+                   WHERE d.case_id=? AND d.version < ?
+                     AND q.status IN ('approved','rejected')
+                   ORDER BY d.version DESC, q.rowid DESC LIMIT 1""",
+                (item["case_id"], item["version"]),
+            ).fetchone()
     verdicts = _process_verdicts(rows)
-    return render_template("review.html", item=item, verdicts=verdicts, user=current_user())
+    return render_template("review.html", item=item, verdicts=verdicts,
+                           prior_review=prior_review, user=current_user())
 
 
 @app.route("/queue/<item_id>/promote", methods=["POST"])
