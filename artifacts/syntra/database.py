@@ -68,6 +68,12 @@ def init_db():
             risk_weight  INTEGER DEFAULT 3,
             suggested_text TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS market_reports (
+            doc_id         TEXT PRIMARY KEY,
+            schema_version TEXT,
+            report_json    TEXT,
+            created_at     TEXT
+        );
         CREATE TABLE IF NOT EXISTS queue_items (
             item_id       TEXT PRIMARY KEY,
             doc_id        TEXT,

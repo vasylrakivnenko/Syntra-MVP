@@ -22,7 +22,9 @@ Syntra provides SMBs and mid-market companies with high quality legal support an
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/syntra/` — Flask app (app.py routes, database.py schema, pipeline/ stages, templates/)
+- `artifacts/syntra/market_lens/` — vendored NDA benchmarking lib (do not edit); `market_data/` holds its 200-NDA SQLite table
+- `artifacts/syntra/pipeline/market.py` — the only adapter between Syntra and market_lens (extraction via llm.py, offline scoring)
 
 ## Architecture decisions
 

@@ -1,0 +1,175 @@
+# Market Lens — NDA typed-field schema (D1)
+#
+# STARTER schema for the walking skeleton. This is a representative ~25-field
+# core covering the §4 regions, NOT the full 80-120 fields of D1. Expand it
+# region by region once the skeleton is validated end-to-end.
+#
+# Per-field keys:
+#   id            unique column name (stable; never rename — add + deprecate)
+#   type          bool | enum | numeric_months
+#   region        one of the §4 regions (for grouped reporting)
+#   favorability  protects_discloser | protects_recipient | neutral   (where orientable)
+#   enum          closed value list (enum type only)
+#   source        provenance of the FIELD IDEA: contractnli | cuad | practitioner
+#                 (informational only — data-licensing is enforced at the ROW level
+#                  via license_class in build_table; see MEMORY / README)
+#   bins          bucket edges in months for numeric_months (co-occurrence tokens)
+#   description   extraction guidance for the model
+#
+# Sentinels:
+#   numeric_months perpetual/indefinite  -> 9999   (the ∞ sentinel)
+#   value = null   -> "could not determine" (EXCLUDED from stats, counted in coverage)
+#   bool  = false  -> "clause absent"       (a real, counted observation)
+
+schema_version: "0.1.0"
+
+fields:
+  # --- parties / mutuality (segment key) ---
+  - id: mutual
+    type: bool
+    region: mutuality
+    favorability: neutral
+    source: practitioner
+    description: >
+      True if confidentiality obligations run BOTH ways (each party is both
+      discloser and recipient). False if unilateral (one disclosing party).
+
+  # --- CI definition breadth ---
+  - id: ci_definition_breadth
+    type: enum
+    region: ci_definition
+    favorability: protects_discloser
+    enum: [marked_only, all_disclosed, deemed_confidential]
+    source: contractnli
+    description: >
+      How broadly Confidential Information is defined. marked_only = only info
+      marked/designated confidential; all_disclosed = all info disclosed;
+      deemed_confidential = info a reasonable person would deem confidential.
+
+  # --- canonical carve-outs (5-6 bools) ---
+  - id: carveout_public_domain
+    type: bool
+    region: carveouts
+    favorability: protects_recipient
+    source: contractnli
+    description: Carve-out for information already/becoming public through no fault of recipient.
+  - id: carveout_independently_developed
+    type: bool
+    region: carveouts
+    favorability: protects_recipient
+    source: contractnli
+    description: Carve-out for information independently developed without use of CI.
+  - id: carveout_rightfully_received
+    type: bool
+    region: carveouts
+    favorability: protects_recipient
+    source: contractnli
+    description: Carve-out for information rightfully received from a third party without duty of confidentiality.
+  - id: carveout_already_known
+    type: bool
+    region: carveouts
+    favorability: protects_recipient
+    source: contractnli
+    description: Carve-out for information already in recipient's possession before disclosure.
+  - id: carveout_required_by_law
+    type: bool
+    region: carveouts
+    favorability: protects_recipient
+    source: contractnli
+    description: Carve-out permitting disclosure required by law/court/regulator (compelled disclosure).
+
+  # --- term + survival (months; 9999 = perpetual) ---
+  - id: term_months
+    type: numeric_months
+    region: term_survival
+    favorability: neutral
+    bins: [12, 24, 36, 60]
+    source: practitioner
+    description: >
+      Duration of the agreement itself in months. Perpetual/indefinite -> 9999.
+      Normalize years to months (2 years -> 24).
+  - id: confidentiality_survival_months
+    type: numeric_months
+    region: term_survival
+    favorability: protects_discloser
+    bins: [12, 24, 36, 60]
+    source: practitioner
+    description: >
+      How long confidentiality obligations survive (in months). May differ from
+      term_months. Perpetual/indefinite survival -> 9999.
+
+  # --- residuals ---
+  - id: residuals_clause
+    type: bool
+    region: residuals
+    favorability: protects_recipient
+    source: practitioner
+    description: >
+      True if a residuals clause permits use of unaided-memory retained
+      information (general knowledge, ideas, know-how).
+
+  # --- non-solicit / non-compete riders ---
+  - id: non_solicit
+    type: bool
+    region: riders
+    favorability: protects_discloser
+    source: practitioner
+    description: True if the agreement includes a non-solicitation of employees/customers clause.
+  - id: non_compete
+    type: bool
+    region: riders
+    favorability: protects_discloser
+    source: practitioner
+    description: True if the agreement includes a non-compete / non-circumvention restriction.
+
+  # --- IP / no license ---
+  - id: no_license_granted
+    type: bool
+    region: ip
+    favorability: neutral
+    source: cuad
+    description: True if the agreement expressly states no license/IP rights are granted by disclosure.
+
+  # --- governing law (grouped) ---
+  - id: governing_law_group
+    type: enum
+    region: governing_law
+    favorability: neutral
+    enum: [delaware, new_york, california, other_us, non_us]
+    source: cuad
+    description: >
+      Governing-law jurisdiction, grouped. Map the named state/country to the
+      closest bucket; anything US outside DE/NY/CA -> other_us; non-US -> non_us.
+
+  # --- dispute resolution ---
+  - id: dispute_resolution
+    type: enum
+    region: dispute_resolution
+    favorability: neutral
+    enum: [litigation, arbitration, unspecified]
+    source: practitioner
+    description: Primary dispute-resolution mechanism specified.
+
+  # --- injunctive relief ---
+  - id: injunctive_relief
+    type: bool
+    region: remedies
+    favorability: protects_discloser
+    source: cuad
+    description: True if the agreement provides for injunctive/equitable relief for breach.
+
+  # --- return / destruction ---
+  - id: return_or_destroy
+    type: bool
+    region: return_destruction
+    favorability: protects_discloser
+    source: contractnli
+    description: True if recipient must return or destroy CI on request/termination.
+
+  # --- affiliates / third-party sharing ---
+  - id: share_with_affiliates
+    type: bool
+    region: third_party_sharing
+    favorability: protects_recipient
+    source: practitioner
+    description: True if recipient may share CI with affiliates/representatives (on back-to-back terms).

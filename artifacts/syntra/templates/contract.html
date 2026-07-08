@@ -113,6 +113,64 @@
   <span class="badge bg-light text-dark fs-6 px-3">{{ abstains | length }} abstained</span>
 </div>
 
+{# ── market lens (advisory statistical context) ── #}
+{% if market %}
+<div class="card mb-4">
+  <div class="card-header bg-dark text-white fw-semibold d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-graph-up me-1"></i>Market Lens — how this NDA compares to the market</span>
+    <small class="fw-normal opacity-75">
+      vs {{ market.segment.n }} {{ 'mutual' if market.segment.mutual else 'unilateral' if market.segment.mutual is false else 'comparable' }} NDAs
+    </small>
+  </div>
+  <div class="card-body">
+    {% set flagged = market.off_market.flagged %}
+    {% if market.off_market.status != 'scored' %}
+    <p class="text-muted mb-3"><i class="bi bi-info-circle me-1"></i>
+      Not enough comparable NDAs in this segment to score clause combinations reliably.
+    </p>
+    {% elif flagged %}
+    <div class="alert alert-warning py-2 mb-3">
+      <strong><i class="bi bi-exclamation-triangle me-1"></i>
+        {{ flagged | length }} unusual clause combination{{ 's' if flagged | length != 1 }}</strong>
+      — rare among comparable NDAs:
+      <ul class="mb-0 mt-1 small">
+        {% for c in flagged[:5] %}
+        <li>{{ c.label }} — only <strong>{{ c.count }} of {{ c.n }}</strong> comparable NDAs ({{ c.share }}%)</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% else %}
+    <p class="text-success mb-3"><i class="bi bi-check-circle me-1"></i>
+      No unusual clause combinations — this NDA's terms look on-market.
+    </p>
+    {% endif %}
+
+    <div class="row row-cols-1 row-cols-md-2 g-2 mb-2">
+      {% for f in market.fields if f.determined %}
+      <div class="col">
+        <div class="d-flex justify-content-between small border rounded px-2 py-1">
+          <span class="text-muted">{{ f.label | title }}</span>
+          <span class="text-end">
+            <strong>{{ f.value }}</strong>
+            {% if f.note %}<span class="text-muted"> · {{ f.note }}</span>{% endif %}
+          </span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% set undetermined = market.fields | rejectattr('determined') | list %}
+    {% if undetermined %}
+    <small class="text-muted d-block mb-1">
+      {{ undetermined | length }} field{{ 's' if undetermined | length != 1 }} couldn't be determined from the text.
+    </small>
+    {% endif %}
+    <small class="text-muted fst-italic">
+      Statistical context from {{ market.segment.table_n }} public SEC-filed NDAs (ContractNLI, CC BY 4.0) — not legal advice, and not used for routing.
+    </small>
+  </div>
+</div>
+{% endif %}
+
 {# ── clause list ── #}
 <h6 class="text-muted fw-semibold mb-2">CLAUSE-BY-CLAUSE ANALYSIS ({{ verdicts | length }} clauses)</h6>
 

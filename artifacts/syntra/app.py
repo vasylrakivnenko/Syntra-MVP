@@ -145,6 +145,20 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
         )
     AuditLog().append_simple(user_id, "pipeline_run", doc_id)
 
+    # Advisory market benchmarking for NDAs — must never break core analysis.
+    if (segment.service_line or "").startswith("nda"):
+        try:
+            from pipeline.market import run_market_lens
+            report = run_market_lens(doc.full_text, filename)
+            with get_db() as db:
+                db.execute(
+                    "INSERT OR REPLACE INTO market_reports VALUES (?,?,?,?)",
+                    (doc_id, report["schema_version"], json.dumps(report),
+                     datetime.datetime.utcnow().isoformat()),
+                )
+        except Exception:
+            print(f"[market-lens] skipped for {doc_id}:\n{traceback.format_exc()}")
+
 
 def _run_pipeline_bg(doc_id: str, path: Path, source_type: str, filename: str, user_id: str):
     """Wrapper that runs _run_pipeline in a thread and updates _jobs."""
@@ -309,8 +323,18 @@ def contract(doc_id):
         queue_item = db.execute(
             "SELECT * FROM queue_items WHERE doc_id=? ORDER BY rowid DESC LIMIT 1", (doc_id,)
         ).fetchone()
+        mr = db.execute(
+            "SELECT report_json FROM market_reports WHERE doc_id=?", (doc_id,)
+        ).fetchone()
+    market = None
+    if mr:
+        try:
+            market = json.loads(mr["report_json"])
+        except Exception:
+            market = None
     redline_available = (UPLOADS / f"{doc_id}_redline.docx").exists()
     return render_template("contract.html", doc=doc, verdicts=verdicts, queue_item=queue_item,
+                           market=market,
                            redline_available=redline_available, user=current_user())
 
 
