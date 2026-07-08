@@ -29,3 +29,58 @@
   <span class="text-muted small">Standard</span>
   {%- endif -%}
 {%- endmacro %}
+
+{# ── one merged urgency+deadline chip, colored by proximity ── #}
+{% macro urgency_chip(urgency, needed_by) -%}
+  {%- if needed_by -%}
+    {%- set d = days_until(needed_by) -%}
+    {%- set color = 'bg-danger' if (d is not none and d <= 0) else ('bg-warning text-dark' if (d is none or d < 3) else 'bg-light text-dark border') -%}
+    <span class="badge {{ color }}"><i class="bi bi-lightning-fill me-1"></i
+      >{%- if d is none -%}Due {{ needed_by }}
+      {%- elif d < 0 -%}Overdue
+      {%- elif d == 0 -%}Due today
+      {%- elif d == 1 -%}Due tomorrow
+      {%- else -%}Due in {{ d }}d{%- endif -%}</span>
+  {%- elif urgency == 'urgent' -%}
+    <span class="badge bg-danger"><i class="bi bi-lightning-fill me-1"></i>Urgent</span>
+  {%- elif urgency == 'high' -%}
+    <span class="badge bg-warning text-dark">High urgency</span>
+  {%- else -%}
+    <span class="badge bg-light text-muted border">Standard</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# ── neutral gray outline pill for metadata (side/recipient/mutual/discloser) ── #}
+{% macro side_pill(side) -%}
+  <span class="badge rounded-pill border border-secondary-subtle text-secondary-emphasis bg-white">{{ side }}</span>
+{%- endmacro %}
+
+{# ── one status badge, single source of truth for workflow-state color ── #}
+{% macro status_badge(doc) -%}
+  {%- if doc.status == 'error' -%}
+    <span class="badge bg-danger"><i class="bi bi-exclamation-octagon me-1"></i>Error</span>
+  {%- elif doc.status != 'processed' -%}
+    <span class="badge bg-secondary">{{ doc.status | replace('_', ' ') | title }}</span>
+  {%- elif doc.review_status == 'pending' -%}
+    <span class="badge bg-warning text-dark"><i class="bi bi-person-exclamation me-1"></i>Attorney review</span>
+  {%- elif doc.review_status == 'approved' -%}
+    <span class="badge bg-success"><i class="bi bi-check2-circle me-1"></i>Approved</span>
+  {%- elif doc.review_status == 'rejected' -%}
+    <span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>Rejected</span>
+  {%- else -%}
+    <span class="badge" style="background:#d1e7dd;color:#0f5132;"><i class="bi bi-check2-circle me-1"></i>Auto-cleared</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# ── what Syntra found — the pipeline's actual output, not just workflow state ── #}
+{% macro risk_chip(doc) -%}
+  {%- if doc.status != 'processed' -%}
+    <span class="text-muted small">—</span>
+  {%- elif doc.risk_unacceptable and doc.risk_unacceptable > 0 -%}
+    <span class="badge bg-danger">{{ doc.risk_flags }} flag{{ 's' if doc.risk_flags != 1 }} · {{ doc.risk_unacceptable }} unacceptable</span>
+  {%- elif doc.risk_flags and doc.risk_flags > 0 -%}
+    <span class="badge bg-warning text-dark">{{ doc.risk_flags }} flag{{ 's' if doc.risk_flags != 1 }}</span>
+  {%- else -%}
+    <span class="badge border border-success-subtle text-success bg-white">Clear</span>
+  {%- endif -%}
+{%- endmacro %}

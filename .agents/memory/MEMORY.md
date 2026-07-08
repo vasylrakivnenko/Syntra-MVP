@@ -4,3 +4,4 @@
 - [Python deps & deploy quirks](python-deps-and-deploy.md) — pyproject deps MUST stay [] (publish runs uv sync → os error 13); prod run env needs PYTHONUSERBASE=.pythonlibs.
 - [SQLite audit lock + Jinja .items](syntra-sqlite-audit-lock.md) — never audit inside an open get_db write transaction (single-writer lock); never use `items` as a Jinja dict key.
 - [Syntra Market Lens integration](syntra-market-lens.md) — vendored lib untouched, single adapter seam, advisory-only (v1 off-market index saturates; never route on it).
+- [Syntra dashboard risk column & attention sort](syntra-dashboard-risk-sort.md) — risk_chip SQL must mirror contract.html's Jinja risk sets; default sort is Python-side attention tiering, not SQL.

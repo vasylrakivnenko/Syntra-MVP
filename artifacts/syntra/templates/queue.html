@@ -15,12 +15,11 @@
         <h6 class="mb-0 fw-semibold">{{ item.filename }}</h6>
         {% set rl = risk_label(item.priority) %}
         <span class="badge bg-{{ rl[1] }}">{{ rl[0] }}</span>
-        {{ chips.urgency_badge(item.urgency) }}
-        {{ chips.deadline_chip(item.needed_by) }}
+        {{ chips.urgency_chip(item.urgency, item.needed_by) }}
       </div>
       <small class="text-muted">
-        Service: {{ (item.service_line or '—').replace('_',' ') | title }}
-        &nbsp;·&nbsp;Side: {{ side_display(item.service_line, item.side) }}
+        Service: {{ service_line_display(item.service_line) }}
+        &nbsp;·&nbsp;Side: {{ chips.side_pill(side_display(item.service_line, item.side)) }}
       </small>
       {% if item.reason %}
       <div><small class="text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>{{ item.reason }}</small></div>

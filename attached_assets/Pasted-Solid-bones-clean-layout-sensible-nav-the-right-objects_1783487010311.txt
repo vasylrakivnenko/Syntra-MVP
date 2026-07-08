@@ -1,0 +1,32 @@
+Solid bones — clean layout, sensible nav, the right objects (queue, playbook, audit) already surfaced. The problems are all in the details, and they're mostly semantic, not aesthetic. Here's the review as a paste-ready brief for your coding agent, ordered by impact:
+
+---
+
+**1. Fix the color semantics — one red, one meaning.** Red currently means three different things in one table row: `Rejected` (status), `Urgent` (priority), `Due tomorrow` (deadline). And `recipient` (neutral metadata) is green, which reads as "good." Define one badge system and apply it everywhere:
+- **Status**: `Approved` green, `Rejected` red, `Attorney review` amber, `Auto-cleared` gray-green — icon + color, as now.
+- **Side** (`recipient`/`mutual`/`discloser`): neutral gray *outline* pills, no fill. It's metadata, not a judgment.
+- **Urgency**: only *this* column gets warm colors. Merge the two chips (`Urgent` + `Due 2026-07-10 (2d)`) into **one** chip: `⚡ Due tomorrow` / `Due in 2d`, colored by proximity (red <24h, amber <3d, gray otherwise). Two adjacent red pills saying overlapping things is noise.
+
+**2. Render the same column the same way.** `Standard` urgency renders as plain text while others are pills — make it a gray pill or an em-dash. Mixed rendering in one column reads as a bug.
+
+**3. Fix the enum leak.** `Nda Standalone` is a title-cased enum value escaping to the UI. Should be `NDA` (or `NDA · Standalone` if the distinction matters). Grep for other `.title()`-style leaks.
+
+**4. Add the one missing column that shows the product: Risk.** The dashboard currently shows *workflow* state but not *what Syntra found* — the actual value. Add a `Risk` column per row: `3 flags · 1 unacceptable` (red-tinted), `2 flags` (amber), `Clear` (green outline). This is the single highest-value change for the demo: the panel sees the pipeline's output at a glance without opening a contract.
+
+**5. Sort by "needs my attention," not upload time.** Attorney-review + urgent items should float to the top; approved/rejected sink. The operator's question every morning is "what do I have to deal with," not "what arrived last." Keep a `Sort: recent` toggle if trivial.
+
+**6. Make rows clickable.** The whole row should navigate (cursor-pointer, hover bg), with the `View` button kept as the affordance. Button-only click targets on a table feel 2012.
+
+**7. Resolve the third stat card.** Two cards are metrics (3, 1), the third is a nav action with an icon — inconsistent. Either make it a metric (`14 playbook rules · v3`, subtitle "Manage →") or demote it to a button next to `Upload Contract`. Also make the entire queue card clickable, not just the arrow text.
+
+**8. De-duplicate upload.** `Upload` in the nav *and* a primary `Upload Contract` button is redundant. Drop it from the nav; the button owns the action.
+
+**9. Dates: human-first.** `Jul 8` in the cell, full ISO timestamp on hover/tooltip. Engineers love `2026-07-08`; operators don't.
+
+**10. Small polish, batch these:** notification bell needs a count badge or should hide when empty; `Welcome back, John Doe` duplicates the header identity — replace with something useful (`3 contracts this week · 1 awaiting review`) or cut; check text contrast on the amber `Attorney review` badge (likely fails AA with white text); table needs an empty state ("No contracts yet — upload your first") since the demo starts from zero.
+
+---
+
+One deliberate *don't*: don't add filters, search, bulk actions, or pagination for this build — three rows don't need them, and the brief explicitly warns against features the user didn't ask for. The `Risk` column (#4) is the only addition; everything else is correction.
+
+The quiet win here: #1 and #4 together turn the dashboard from "generic SaaS table" into "triage instrument" — which is the product thesis rendered as UI. That's worth 30 minutes of the agent's time before the demo recording.

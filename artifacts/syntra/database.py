@@ -103,6 +103,9 @@ def init_db():
             created_by   TEXT,
             created_at   TEXT
         );
+        CREATE INDEX IF NOT EXISTS idx_verdicts_doc_id ON verdicts(doc_id);
+        CREATE INDEX IF NOT EXISTS idx_queue_items_doc_id ON queue_items(doc_id);
+        CREATE INDEX IF NOT EXISTS idx_queue_items_status ON queue_items(status);
         """)
         # Lightweight migrations for databases created before a column existed.
         for stmt in (

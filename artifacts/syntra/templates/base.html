@@ -17,6 +17,8 @@
     .verdict-abstain             { border-left: 4px solid #adb5bd; background: #fafafa; }
     .matrix-table td, .matrix-table th { vertical-align: middle; }
     .card { border: none; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    tr.cursor-pointer { cursor: pointer; }
+    tr.cursor-pointer:hover { background: #f1f3f5; }
     /* ── grounded citations ── */
     .citation-details summary { cursor: pointer; list-style: none; display: inline; }
     .citation-details summary::-webkit-details-marker { display: none; }
@@ -43,7 +45,6 @@
     {% if user %}
     <div class="navbar-nav ms-auto d-flex flex-row align-items-center gap-3">
       <a class="nav-link text-white-50" href="/contracts"><i class="bi bi-file-text"></i> Contracts</a>
-      <a class="nav-link text-white-50" href="/upload"><i class="bi bi-upload"></i> Upload</a>
       <a class="nav-link text-white-50" href="/playbook"><i class="bi bi-table"></i> Playbook</a>
       <a class="nav-link text-white-50" href="/queue"><i class="bi bi-list-check"></i> Queue</a>
       <a class="nav-link text-white-50" href="/audit"><i class="bi bi-journal-check"></i> Audit</a>

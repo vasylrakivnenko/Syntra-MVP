@@ -332,6 +332,59 @@ def days_until(datestr):
         return None
 
 
+# Human labels for service-line enum ids — avoids raw ids like "nda_standalone"
+# leaking to the UI as a title-cased mess ("Nda Standalone").
+_SERVICE_LINE_LABELS = {
+    "nda_standalone": "NDA",
+    "nda": "NDA",
+    "general_supplier": "Supplier Agreement",
+    "general_customer": "Customer Agreement",
+}
+
+
+@app.template_global("service_line_display")
+def service_line_display(service_line):
+    if not service_line:
+        return "—"
+    return _SERVICE_LINE_LABELS.get(service_line, service_line.replace("_", " ").title())
+
+
+@app.template_global("human_date")
+def human_date(iso_str):
+    """Short human date for table cells; pass the raw iso_str separately for a tooltip."""
+    if not iso_str:
+        return "—"
+    try:
+        return datetime.datetime.fromisoformat(iso_str).strftime("%b %-d")
+    except Exception:
+        return iso_str[:10]
+
+
+def _attention_sort_key(d):
+    """Sort key for 'needs my attention' ordering: pending review / urgent
+    float to top, approved/rejected sink — see dashboard UX brief."""
+    review_status = d["review_status"]
+    urgency = d["urgency"] or "standard"
+    resolved = review_status in ("approved", "rejected")
+    if resolved:
+        tier = 3
+    elif review_status == "pending" or urgency == "urgent":
+        tier = 0
+    elif urgency == "high":
+        tier = 1
+    else:
+        tier = 2
+    needed_by = d["needed_by"] or "9999-99-99"
+    risk_flags = d["risk_flags"] if "risk_flags" in d.keys() else 0
+    return (tier, needed_by, -(risk_flags or 0))
+
+
+def _sort_docs(docs, sort_mode):
+    if sort_mode == "recent":
+        return docs
+    return sorted(docs, key=_attention_sort_key)
+
+
 @app.context_processor
 def inject_mvp_notice():
     """One-shot MVP disclaimer popup — armed by the upload flow, consumed by
@@ -431,17 +484,40 @@ def healthz():
     return {"status": "ok"}, 200
 
 
+_DOCS_QUERY = """
+    SELECT d.*,
+           (SELECT q.status FROM queue_items q
+             WHERE q.doc_id = d.doc_id ORDER BY q.rowid DESC LIMIT 1) AS review_status,
+           (SELECT COUNT(*) FROM verdicts v
+             WHERE v.doc_id = d.doc_id AND v.status = 'unacceptable') AS risk_unacceptable,
+           (SELECT COUNT(*) FROM verdicts v
+             WHERE v.doc_id = d.doc_id
+               AND ((v.branch = 'verdict' AND v.status != 'complies') OR v.branch = 'silence')
+           ) AS risk_flags
+    FROM documents d
+"""
+
+
 @app.route("/")
 @login_required
 def index():
+    sort_mode = "recent" if request.args.get("sort") == "recent" else "attention"
+    user = current_user()
     with get_db() as db:
-        docs = db.execute(
-            """SELECT d.*, (SELECT q.status FROM queue_items q
-                            WHERE q.doc_id = d.doc_id ORDER BY q.rowid DESC LIMIT 1) AS review_status
-               FROM documents d ORDER BY d.uploaded_at DESC LIMIT 10"""
-        ).fetchall()
+        docs = db.execute(_DOCS_QUERY + " ORDER BY d.uploaded_at DESC").fetchall()
         pending = db.execute("SELECT COUNT(*) FROM queue_items WHERE status='pending'").fetchone()[0]
-    return render_template("index.html", docs=docs, pending=pending, user=current_user())
+        week_ago = (datetime.datetime.utcnow() - datetime.timedelta(days=7)).isoformat()
+        this_week = db.execute(
+            "SELECT COUNT(*) FROM documents WHERE uploaded_at >= ?", (week_ago,)
+        ).fetchone()[0]
+    playbook = load_playbook()
+    rule_count = sum(len(sl.positions) for sl in playbook.service_lines)
+    docs = _sort_docs(docs, sort_mode)[:10]
+    return render_template(
+        "index.html", docs=docs, pending=pending, user=user, sort_mode=sort_mode,
+        this_week=this_week, rule_count=rule_count,
+        playbook_version=playbook.version.split(".")[0],
+    )
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -658,13 +734,11 @@ def review_status(doc_id):
 @app.route("/contracts")
 @login_required
 def contracts():
+    sort_mode = "recent" if request.args.get("sort") == "recent" else "attention"
     with get_db() as db:
-        docs = db.execute(
-            """SELECT d.*, (SELECT q.status FROM queue_items q
-                            WHERE q.doc_id = d.doc_id ORDER BY q.rowid DESC LIMIT 1) AS review_status
-               FROM documents d ORDER BY d.uploaded_at DESC"""
-        ).fetchall()
-    return render_template("contracts.html", docs=docs, user=current_user())
+        docs = db.execute(_DOCS_QUERY + " ORDER BY d.uploaded_at DESC").fetchall()
+    docs = _sort_docs(docs, sort_mode)
+    return render_template("contracts.html", docs=docs, user=current_user(), sort_mode=sort_mode)
 
 
 @app.route("/contracts/<doc_id>")
