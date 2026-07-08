@@ -47,3 +47,15 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Secrets — never commit environment files
+.env
+.env.*
+
+# Syntra runtime data — regenerated on startup (init_db + seed.json);
+# uploads hold ingested contracts and must never enter version control.
+# NOTE: market_data/market.sqlite + market.parquet stay tracked — vendored
+# public ContractNLI corpus the app needs at runtime.
+artifacts/syntra/syntra.db
+artifacts/syntra/*.db
+artifacts/syntra/uploads/

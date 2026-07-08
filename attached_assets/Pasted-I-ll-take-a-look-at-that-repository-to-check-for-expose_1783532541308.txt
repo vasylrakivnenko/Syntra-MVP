@@ -1,0 +1,42 @@
+I'll take a look at that repository to check for exposed PII or API keys.I can see the repo structure, but to properly check for PII and API keys I need to actually scan the file contents. Let me clone it and run some checks.This is a substantial repo with 295 files, including actual uploaded documents and config files. Let me scan systematically for secrets and PII.Notable already: `.gitignore` doesn't exclude `.env` files or the `uploads/` folder. Let me scan for API keys and secrets across all text files.Good — the API-key references appear to read from environment variables rather than hardcoding. Let me verify the key-loading code directly and check for any actual key values.API keys are clean — every provider reads from environment variables, with explicit "Never written to disk" comments. The real risk area is the uploaded documents and seed data. Let me examine those for PII.Two SQLite databases are committed, plus real uploaded contracts. Let me inspect the application database and the uploaded documents — these are the highest-risk for real PII.The database contains real document content, clauses, and party info. Let me look at the actual data to determine whether it's test material or real contracts with PII.The data looks like test/sample NDAs (Acme Corp, Beta LLC, filenames marked "TEST"). But let me verify the actual uploaded document files, especially the ones without a "test" marker, since those PDFs/DOCX are committed to the repo.All uploaded documents are template/sample NDAs — no emails, phones, or SSNs, only placeholder party names. Let me check the remaining areas: the pasted text files, the screenshots, the zip, the Market Lens data, and git history.The text files are Vasyl's own build specs and the zip holds the public ContractNLI dataset. Let me finish with the Market Lens data, the audit log, and git author info.Market data is all categorical NDA feature flags — no PII. Git author is just "Replit Agent." Let me do a final check on the market source identifiers and try to OCR a couple of the screenshots, since those I can't otherwise verify.Market data is the public ContractNLI corpus (CC-BY-4.0). Let me OCR the screenshots to check for anything visible like account names, emails, or personal info.The "@" hits need context — let me confirm they're not partial emails.I've done a full scan of the repo — cloned it, checked every source file, both SQLite databases, all uploaded documents, the attached assets and zip, and OCR'd all 25 screenshots. Here's the report.
+
+## Bottom line
+
+No exposed API keys or secrets, and no real personal PII. Everything sensitive-looking is test/template data. But there are two hygiene issues worth fixing before this ever touches a real client contract.
+
+## API keys / secrets — clean
+
+Every provider reads its key from an environment variable, never hardcoded:
+- `llm.py` → `AI_INTEGRATIONS_OPENAI_API_KEY` / `OPENAI_API_KEY`
+- `market_lens/providers/azure_openai.py` → `AZURE_OPENAI_KEY` (comment even notes "Never written to disk")
+- `market_lens/providers/hyperbolic.py` → `HYPERBOLIC_API_KEY`
+- `extract.py` → `ANTHROPIC_API_KEY`
+
+No `.env` file is committed, no tokens in `.npmrc` / `.replit`, and the git author across all 46 commits is just `Replit Agent <agent@replit.com>` — your personal email isn't in the history.
+
+## PII — no real personal data, but confidential documents are committed
+
+The data is all synthetic or public:
+- **Users** (`syntra.db`, `seed.json`): only test accounts — John Doe, smoketest, archsmoke, uxcheck, etc. Name-only login, no passwords stored.
+- **Documents / clauses**: template NDAs with placeholder parties (Acme Corp, Beta LLC, "Vendor Counterparty LLC", "Northbay Analytics", blank `______` fields, a generic tribal-nation boilerplate). Extracted text across all 12 uploaded PDFs/DOCX contains **zero** emails, phone numbers, or SSNs.
+- **Market Lens data** (`market.sqlite` / `market.parquet`, 200 rows): the public ContractNLI corpus (`cnli_*` IDs, CC-BY-4.0), only categorical clause flags.
+- **Screenshots** (25 PNGs): UI captures of your own app on test data. The "@" symbols OCR flagged are avatar/nav icons, not email addresses.
+- **Pasted text files**: your own Syntra build specs — no personal data.
+
+## Two things to fix (hygiene, not an active leak)
+
+1. **Your `.gitignore` doesn't exclude the things that will bite you later.** It omits `.env`, `*.db`, `uploads/`, and `attached_assets/`. Right now those hold only test data, but for an app whose entire purpose is ingesting confidential NDAs, the moment a real `.env` or a real client contract lands in the working tree it gets committed. Add:
+   ```
+   .env
+   .env.*
+   *.db
+   *.sqlite
+   artifacts/syntra/uploads/
+   artifacts/syntra/syntra.db
+   ```
+
+2. **Two SQLite databases and 12 contract files are currently tracked.** Even as test data, committing the app's live DB and an `uploads/` folder trains a bad pattern. I'd `git rm --cached` them, regenerate from `seed.json` on setup, and keep uploads out of the tree entirely. If you want them truly gone (not just removed going forward), you'd need history rewriting (`git filter-repo`) since they're in past commits — though given it's all test data, that's optional here.
+
+One minor note, not a risk: the repo's About field and `replit.md` reference your Replit workspace URL under the `logity-tech-inc` org. That's a business identifier already visible on the public repo, so nothing to remediate unless you'd rather not advertise the org.
+
+Want me to draft the updated `.gitignore` and the exact `git rm --cached` commands as a ready-to-run cleanup script?
