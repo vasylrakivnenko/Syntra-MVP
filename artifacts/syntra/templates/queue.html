@@ -2,7 +2,7 @@
 {% block title %}Review Queue — Syntra{% endblock %}
 {% block content %}
 <h3 class="fw-bold mb-1">Attorney Queue</h3>
-<p class="text-muted small mb-4">Contracts escalated for human review, sorted by risk priority.</p>
+<p class="text-muted small mb-4">Contracts escalated for human review — urgent first, then by deadline, then by risk.</p>
 
 {% if items %}
 <div class="list-group">
@@ -10,11 +10,30 @@
 <div class="list-group-item list-group-item-action px-4 py-3">
   <div class="d-flex justify-content-between align-items-center">
     <div>
-      <h6 class="mb-0 fw-semibold">{{ item.filename }}</h6>
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <h6 class="mb-0 fw-semibold">{{ item.filename }}</h6>
+        {% set rl = risk_label(item.priority) %}
+        <span class="badge bg-{{ rl[1] }}">{{ rl[0] }}</span>
+        {% if item.urgency == 'urgent' %}
+        <span class="badge bg-danger"><i class="bi bi-lightning-fill me-1"></i>Urgent</span>
+        {% elif item.urgency == 'high' %}
+        <span class="badge bg-warning text-dark">High urgency</span>
+        {% endif %}
+        {% if item.needed_by %}
+        {% set d = days_until(item.needed_by) %}
+        <span class="badge {{ 'bg-danger' if d is not none and d <= 1 else 'bg-light text-dark border' }}">
+          <i class="bi bi-calendar-event me-1"></i>
+          {%- if d is none %}Due {{ item.needed_by }}
+          {%- elif d < 0 %}Overdue ({{ item.needed_by }})
+          {%- elif d == 0 %}Due today
+          {%- elif d == 1 %}Due tomorrow
+          {%- else %}Due {{ item.needed_by }} ({{ d }}d){% endif %}
+        </span>
+        {% endif %}
+      </div>
       <small class="text-muted">
         Service: {{ (item.service_line or '—').replace('_',' ') | title }}
         &nbsp;·&nbsp;Side: {{ side_display(item.service_line, item.side) }}
-        &nbsp;·&nbsp;Priority score: <strong>{{ item.priority }}</strong>
       </small>
       {% if item.reason %}
       <div><small class="text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>{{ item.reason }}</small></div>

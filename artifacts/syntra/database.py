@@ -109,6 +109,8 @@ def init_db():
             "ALTER TABLE documents ADD COLUMN content_hash TEXT",
             "ALTER TABLE documents ADD COLUMN parties_json TEXT",
             "ALTER TABLE documents ADD COLUMN our_party TEXT",
+            "ALTER TABLE documents ADD COLUMN urgency TEXT",
+            "ALTER TABLE documents ADD COLUMN needed_by TEXT",
             "ALTER TABLE queue_items ADD COLUMN reviewed_at TEXT",
             "ALTER TABLE queue_items ADD COLUMN reviewed_by TEXT",
             "ALTER TABLE queue_items ADD COLUMN acknowledged_at TEXT",

@@ -208,7 +208,9 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
                             db.execute("UPDATE queue_items SET reason=? WHERE item_id=?",
                                        (merged, existing["item_id"]))
                     else:
-                        qi = QueueItem(doc_id=doc_id, priority=2 * len(escalations),
+                        # Floor at 3 so an escalated item never shows "Low risk".
+                        qi = QueueItem(doc_id=doc_id,
+                                       priority=max(3, 2 * len(escalations)),
                                        reason=reason)
                         db.execute(
                             """INSERT OR REPLACE INTO queue_items
@@ -263,6 +265,26 @@ def nda_perspective(service_line, side=None):
     return _NDA_PERSPECTIVE.get(service_line or "")
 
 
+@app.template_global("risk_label")
+def risk_label(priority):
+    """Translate the machine risk score into a human label + bootstrap color."""
+    p = priority or 0
+    if p >= 5:
+        return "High risk", "danger"
+    if p >= 3:
+        return "Medium risk", "warning text-dark"
+    return "Low risk", "secondary"
+
+
+@app.template_global("days_until")
+def days_until(datestr):
+    """Days from today until an ISO date; None if unparseable."""
+    try:
+        return (datetime.date.fromisoformat(datestr) - datetime.date.today()).days
+    except Exception:
+        return None
+
+
 @app.context_processor
 def inject_inbox():
     """Navbar bell: role-aware attention list.
@@ -282,17 +304,26 @@ def inject_inbox():
                     "SELECT COUNT(*) AS n FROM queue_items WHERE status='pending'",
                 ).fetchone()["n"]
                 rows = db.execute(
-                    """SELECT q.item_id, q.doc_id, q.reason, q.priority, d.filename
+                    """SELECT q.item_id, q.doc_id, q.reason, q.priority,
+                              d.filename, d.urgency, d.needed_by
                        FROM queue_items q JOIN documents d ON q.doc_id=d.doc_id
                        WHERE q.status='pending'
-                       ORDER BY q.priority DESC LIMIT 8""",
+                       ORDER BY CASE d.urgency WHEN 'urgent' THEN 2 WHEN 'high' THEN 1 ELSE 0 END DESC,
+                                CASE WHEN d.needed_by IS NULL THEN 1 ELSE 0 END,
+                                d.needed_by ASC,
+                                q.priority DESC LIMIT 8""",
                 ).fetchall()
                 items = [{
                     "url": url_for("review", item_id=r["item_id"]),
                     "filename": r["filename"],
-                    "label": f"priority {r['priority']}",
-                    "badge": "warning text-dark",
-                    "detail": (r["reason"] or "Escalated for review")[:90],
+                    "label": ("urgent" if r["urgency"] == "urgent"
+                              else "high" if r["urgency"] == "high"
+                              else risk_label(r["priority"])[0]),
+                    "badge": ("danger" if r["urgency"] == "urgent"
+                              else "warning text-dark" if r["urgency"] == "high"
+                              else risk_label(r["priority"])[1]),
+                    "detail": (f"Due {r['needed_by']} · " if r["needed_by"] else "")
+                              + (r["reason"] or "Escalated for review")[:80],
                 } for r in rows]
                 title = "Awaiting your review"
             else:
@@ -378,19 +409,42 @@ def upload():
         if ext not in ("docx", "pdf"):
             flash("Only .docx and .pdf files are supported.")
             return render_template("upload.html", user=current_user())
+        urgency = request.form.get("urgency", "standard")
+        if urgency not in ("standard", "high", "urgent"):
+            urgency = "standard"
+        needed_by = request.form.get("needed_by", "").strip() or None
+        if needed_by:
+            try:
+                datetime.date.fromisoformat(needed_by)
+            except ValueError:
+                needed_by = None
         file_bytes = f.read()
         content_hash = hashlib.sha256(file_bytes).hexdigest()
         # Same file already analysed (or in flight)? Reuse it instead of
         # creating a duplicate document + a duplicate pipeline run.
         with get_db() as db:
             dup = db.execute(
-                """SELECT doc_id, status FROM documents
+                """SELECT doc_id, status, urgency, needed_by FROM documents
                    WHERE content_hash=? AND status IN ('processing','processed','awaiting_party')
                    ORDER BY uploaded_at DESC LIMIT 1""",
                 (content_hash,),
             ).fetchone()
+            if dup:
+                # Re-uploading the same file is the only way to flag an existing
+                # contract as more urgent — escalate, never downgrade.
+                rank = {"standard": 0, "high": 1, "urgent": 2}
+                new_urgency = (urgency if rank.get(urgency, 0) > rank.get(dup["urgency"] or "standard", 0)
+                               else dup["urgency"])
+                new_deadline = (min(filter(None, (needed_by, dup["needed_by"])))
+                                if (needed_by or dup["needed_by"]) else None)
+                if (new_urgency, new_deadline) != (dup["urgency"], dup["needed_by"]):
+                    db.execute("UPDATE documents SET urgency=?, needed_by=? WHERE doc_id=?",
+                               (new_urgency, new_deadline, dup["doc_id"]))
+                    flash("This exact file has already been analysed — updated its "
+                          "urgency/deadline and showing the existing analysis.")
+                else:
+                    flash("This exact file has already been analysed — showing the existing analysis.")
         if dup:
-            flash("This exact file has already been analysed — showing the existing analysis.")
             target = {"processing": "processing",
                       "awaiting_party": "select_party"}.get(dup["status"], "contract")
             return redirect(url_for(target, doc_id=dup["doc_id"]))
@@ -416,13 +470,15 @@ def upload():
             db.execute(
                 """INSERT OR REPLACE INTO documents
                    (doc_id, source_type, status, side, service_line,
-                    uploaded_by, uploaded_at, filename, content_hash, parties_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    uploaded_by, uploaded_at, filename, content_hash, parties_json,
+                    urgency, needed_by)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (doc_id, source_type,
                  "awaiting_party" if awaiting else "processing",
                  None, None, user["user_id"],
                  datetime.datetime.utcnow().isoformat(), f.filename, content_hash,
-                 json.dumps(parties) if parties else None),
+                 json.dumps(parties) if parties else None,
+                 urgency, needed_by),
             )
         if awaiting:
             return redirect(url_for("select_party", doc_id=doc_id))
@@ -666,9 +722,13 @@ def playbook_ai():
 def queue():
     with get_db() as db:
         items = db.execute(
-            """SELECT q.*, d.filename, d.service_line, d.side
+            """SELECT q.*, d.filename, d.service_line, d.side, d.urgency, d.needed_by
                FROM queue_items q JOIN documents d ON q.doc_id=d.doc_id
-               WHERE q.status='pending' ORDER BY q.priority DESC""",
+               WHERE q.status='pending'
+               ORDER BY CASE d.urgency WHEN 'urgent' THEN 2 WHEN 'high' THEN 1 ELSE 0 END DESC,
+                        CASE WHEN d.needed_by IS NULL THEN 1 ELSE 0 END,
+                        d.needed_by ASC,
+                        q.priority DESC""",
         ).fetchall()
     return render_template("queue.html", items=items, user=current_user())
 
