@@ -18,7 +18,7 @@ _MAX_PARTIES = 4
 
 def infer_parties(text: str) -> list[dict]:
     """Return [{"name": ..., "role": ...}, ...] — [] when unavailable/unclear."""
-    from llm import LIGHT_MODEL, get_client, llm_available
+    from llm import LIGHT_MODEL, audited_chat, llm_available
 
     if not llm_available() or not (text or "").strip():
         return []
@@ -36,7 +36,8 @@ def infer_parties(text: str) -> list[dict]:
         f"CONTRACT EXCERPT:\n{text[:_SAMPLE_CHARS]}\n\n"
         'Return JSON: {"parties": [{"name": "...", "role": "..."}]}'
     )
-    resp = get_client().chat.completions.create(
+    resp = audited_chat(
+        "party_inference", ref=text[:1000],
         model=LIGHT_MODEL,
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},

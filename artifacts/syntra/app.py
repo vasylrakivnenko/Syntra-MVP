@@ -134,6 +134,8 @@ def _enrich_citations(verdicts):
 # ── pipeline runner ───────────────────────────────────────────────────────────
 def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user_id: str,
                   our_party: dict | None = None):
+    from llm import set_llm_actor
+    set_llm_actor(user_id)  # attribute every model call in this run to the uploader
     playbook = load_playbook()
     lane_two = LaneTwoAgent()
 
@@ -610,6 +612,8 @@ def upload():
         # back to the fully automatic flow — upload never blocks on this.
         parties: list[dict] = []
         try:
+            from llm import set_llm_actor
+            set_llm_actor(user["user_id"])
             text = Ingestor().ingest(file_bytes, source_type, doc_id).full_text
             parties = infer_parties(text)
         except Exception:
@@ -862,7 +866,13 @@ def playbook_save():
         editor.rename_row(request.form["service_line_id"], request.form["new_label"])
     elif action == "rename_column":
         editor.rename_column(request.form["policy_id"], request.form["new_label"])
-    editor.save(current_user()["user_id"])
+    user_id = current_user()["user_id"]
+    version = editor.save(user_id)
+    # Audit AFTER save() returns — its get_db block has committed by then.
+    AuditLog().append_simple(
+        user_id, f"playbook_{action or 'edit'}",
+        json.dumps({"version": version, **request.form.to_dict()}, sort_keys=True),
+    )
     return redirect(url_for("playbook_view"))
 
 
@@ -873,9 +883,17 @@ def playbook_ai():
     if not prompt:
         return {"success": False, "error": "No prompt"}
     editor = PlaybookEditor.load()
+    user_id = current_user()["user_id"]
     try:
+        from llm import set_llm_actor
+        set_llm_actor(user_id)  # the model call inside edit_with_ai is audited too
         changes = editor.edit_with_ai(prompt)
-        editor.save(current_user()["user_id"])
+        version = editor.save(user_id)
+        AuditLog().append_simple(
+            user_id, "playbook_ai_edit",
+            json.dumps({"version": version, "prompt": prompt, "changes": changes},
+                       sort_keys=True),
+        )
         return {"success": True, "changes": changes}
     except Exception as e:
         return {"success": False, "error": str(e)}

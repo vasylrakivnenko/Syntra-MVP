@@ -107,10 +107,10 @@ class PlaybookEditor:
 
     def edit_with_ai(self, prompt: str) -> list[str]:
         """Apply an AI-suggested diff to the matrix; return list of change descriptions."""
-        from llm import get_client, MODEL
-        client = get_client()
+        from llm import audited_chat, MODEL
         matrix_yaml = yaml.dump(self.playbook.model_dump(), allow_unicode=True, sort_keys=False)
-        response = client.chat.completions.create(
+        response = audited_chat(
+            "playbook_ai_edit", ref=prompt,
             model=MODEL,
             messages=[
                 {

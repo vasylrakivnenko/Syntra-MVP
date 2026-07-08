@@ -25,7 +25,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from llm import MODEL, get_client
+from llm import MODEL, audited_chat
 from market_lens.extract import Extraction, _to_extraction
 from market_lens.providers.hyperbolic import (
     SYSTEM_PROMPT,
@@ -64,7 +64,8 @@ def extract_market_row(text: str, source_name: str = "<doc>",
           'mapping to {"value": ..., "evidence_span": ...}.\n\n'
         + "=== NDA DOCUMENT ===\n" + text[:_MAX_DOC_CHARS]
     )
-    resp = get_client().chat.completions.create(
+    resp = audited_chat(
+        "market_extraction", ref=source_name,
         model=MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -229,7 +230,8 @@ def assess_market_flags(report: dict[str, Any], perspective: str,
         f"Playbook findings already raised:\n{findings_txt}\n\n"
         f"Off-market clause combinations:\n{combos_txt}"
     )
-    resp = get_client().chat.completions.create(
+    resp = audited_chat(
+        "market_assessment", ref=perspective,
         model=LIGHT_MODEL,
         messages=[
             {"role": "system", "content": _ASSESS_SYSTEM},

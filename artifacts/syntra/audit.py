@@ -2,17 +2,22 @@
 import hashlib
 import json
 import datetime
+import threading
 from models import AuditEvent, Citation
 from database import get_db
+
+# Serializes SELECT-last + INSERT so concurrent appends (bg pipeline thread vs
+# request threads) can't both chain to the same tip and fork the hash chain.
+_APPEND_LOCK = threading.Lock()
 
 
 class AuditLog:
     def append(self, event: AuditEvent) -> AuditEvent:
-        with get_db() as conn:
+        with _APPEND_LOCK, get_db() as conn:
             last = conn.execute(
                 "SELECT event_id, ts, actor_id, action, input_hash, "
                 "prompt_hash, output_json, citations, prev_hash "
-                "FROM audit_events ORDER BY ts DESC LIMIT 1"
+                "FROM audit_events ORDER BY rowid DESC LIMIT 1"
             ).fetchone()
             if last:
                 prev_data = json.dumps(dict(last), sort_keys=True)

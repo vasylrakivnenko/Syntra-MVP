@@ -98,7 +98,7 @@ class Chunker:
 
     def _split_by_llm_anchors(self, doc: Document) -> list[Clause]:
         try:
-            from llm import get_client, MODEL, llm_available
+            from llm import audited_chat, MODEL, llm_available
         except ImportError:
             return []
 
@@ -107,8 +107,8 @@ class Chunker:
             return []
 
         try:
-            client = get_client()
-            resp = client.chat.completions.create(
+            resp = audited_chat(
+                "chunker", ref=getattr(doc, "id", ""),
                 model=MODEL,
                 messages=[
                     {"role": "system", "content": _SEGMENT_SYSTEM},

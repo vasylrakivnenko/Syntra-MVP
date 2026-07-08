@@ -21,10 +21,9 @@ class PlaybookBuilder:
             from playbook.editor import PlaybookEditor
             return PlaybookEditor.load().playbook
 
-        from llm import get_client, MODEL
+        from llm import audited_chat, MODEL
         from pipeline.segmenter import Segmenter
 
-        client = get_client()
         segmenter = Segmenter()
 
         # Pass 1: cluster by (side, service_line)
@@ -52,7 +51,8 @@ class PlaybookBuilder:
                     '- "walk_away": clearly rejected position'
                 )
                 try:
-                    resp = client.chat.completions.create(
+                    resp = audited_chat(
+                        "playbook_builder", ref=f"{sl_id}:{policy.id}",
                         model=MODEL,
                         messages=[{"role": "user", "content": prompt}],
                         response_format={"type": "json_object"},

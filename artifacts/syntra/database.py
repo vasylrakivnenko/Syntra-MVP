@@ -13,6 +13,10 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # The bg pipeline thread now appends per-LLM-call audit events concurrently
+    # with request-thread writes; without a busy timeout SQLite raises
+    # "database is locked" immediately instead of waiting.
+    conn.execute("PRAGMA busy_timeout=5000")
     try:
         yield conn
         conn.commit()

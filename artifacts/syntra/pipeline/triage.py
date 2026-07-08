@@ -96,7 +96,7 @@ class Triage:
         segment: Segment,
         cited_position: dict | None = None,
     ) -> ClauseVerdict:
-        from llm import get_client, MODEL, llm_available
+        from llm import audited_chat, MODEL, llm_available
 
         if not llm_available():
             return ClauseVerdict(
@@ -105,7 +105,6 @@ class Triage:
                 service_line=segment.service_line,
             )
 
-        client = get_client()
         prompt = (
             "You are a contract review expert. Compare this clause against the company's playbook position.\n\n"
             f"CLAUSE:\n{clause.text[:900]}\n\n"
@@ -120,7 +119,8 @@ class Triage:
             '"suggested_text":"<brief suggested alternative if unacceptable, else empty>"}'
         )
         try:
-            resp = client.chat.completions.create(
+            resp = audited_chat(
+                "triage", ref=clause.id,
                 model=MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},

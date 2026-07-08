@@ -26,12 +26,11 @@ class Classifier:
     TAXONOMY = TAXONOMY
 
     def classify(self, clause: Clause) -> Classification:
-        from llm import get_client, MODEL, llm_available
+        from llm import audited_chat, MODEL, llm_available
 
         if not llm_available():
             return Classification(clause_type="other", confidence=0.1, spans=[])
 
-        client = get_client()
         prompt = (
             f"Classify this contract clause into exactly one category from the list below.\n\n"
             f"CATEGORIES: {', '.join(TAXONOMY)}\n\n"
@@ -39,7 +38,8 @@ class Classifier:
             'Return JSON: {"clause_type":"<category>","confidence":0.0,"reasoning":"<one sentence>"}'
         )
         try:
-            resp = client.chat.completions.create(
+            resp = audited_chat(
+                "classifier", ref=clause.id,
                 model=MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},

@@ -21,12 +21,11 @@ class LaneTwoAgent:
         if not passages:
             return None
 
-        from llm import get_client, MODEL, llm_available
+        from llm import audited_chat, MODEL, llm_available
         if not llm_available():
             return None
 
         context = "\n".join(f"- {p['text']}" for p in passages)
-        client = get_client()
         prompt = (
             "You are a contract review expert with access to the following company policy passages.\n\n"
             f"COMPANY KNOWLEDGE:\n{context}\n\n"
@@ -35,7 +34,8 @@ class LaneTwoAgent:
             'Return JSON: {"clause_type":"<category>","confidence":0.0}'
         )
         try:
-            resp = client.chat.completions.create(
+            resp = audited_chat(
+                "lane_two", ref=clause.id,
                 model=MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
