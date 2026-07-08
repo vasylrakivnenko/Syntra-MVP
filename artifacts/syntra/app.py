@@ -333,6 +333,13 @@ def days_until(datestr):
 
 
 @app.context_processor
+def inject_mvp_notice():
+    """One-shot MVP disclaimer popup — armed by the upload flow, consumed by
+    the next rendered page. Routes may also force it via show_mvp_modal=True."""
+    return {"show_mvp_modal": session.pop("mvp_notice", False)}
+
+
+@app.context_processor
 def inject_inbox():
     """Navbar bell: role-aware attention list.
 
@@ -497,6 +504,7 @@ def upload():
                 else:
                     flash("This exact file has already been analysed — showing the existing analysis.")
         if dup:
+            session["mvp_notice"] = True
             target = {"processing": "processing",
                       "awaiting_party": "select_party"}.get(dup["status"], "contract")
             return redirect(url_for(target, doc_id=dup["doc_id"]))
@@ -532,6 +540,8 @@ def upload():
                  json.dumps(parties) if parties else None,
                  urgency, needed_by),
             )
+        # Arm the one-shot MVP disclaimer popup for the next page render.
+        session["mvp_notice"] = True
         if awaiting:
             return redirect(url_for("select_party", doc_id=doc_id))
         _jobs[doc_id] = {"status": "running", "error": None}
@@ -707,7 +717,8 @@ def redline_preview(doc_id):
             (doc_id,),
         ).fetchall()
     verdicts = _process_verdicts(rows)
-    return render_template("redline_preview.html", doc=doc, verdicts=verdicts, user=current_user())
+    return render_template("redline_preview.html", doc=doc, verdicts=verdicts,
+                           user=current_user(), show_mvp_modal=True)
 
 
 @app.route("/contracts/<doc_id>/download")

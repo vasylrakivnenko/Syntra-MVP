@@ -35,6 +35,7 @@ Syntra provides SMBs and mid-market companies with high quality legal support an
 - Role-aware inbox bell is injected via `@app.context_processor` (attorney → pending queue items; operator → unacknowledged decisions on own uploads).
 - Grounded citations: triage snapshots the exact playbook position into `verdicts.cited_position` at analysis time (`as_of:"analysis"`) so citations survive playbook edits; rows analyzed before the feature are backfilled on read from the CURRENT playbook (`as_of:"current"`, labeled as such in the UI). Abstains are intentionally uncited.
 - "Silence" verdicts mean the clause EXISTS but the playbook has no position for it (gap is in OUR playbook, not the document) — citation UIs must link the clause, not claim it's missing.
+- MVP disclaimer: shared modal `#mvpModal` in base.html. Shown one-shot after uploads via `session["mvp_notice"]` popped by the `inject_mvp_notice` context processor; forced every visit on redline preview via `show_mvp_modal=True` in render_template (template context overrides processor); download links use class `mvp-guard` (JS click intercept). Navbar carries a `.mvp-sup` superscript badge.
 - Citation UI is shared via `templates/_citations.html` macro (`link_prefix` arg for cross-page use); playbook matrix cells carry unconditional `pos-<sl>-<policy>` anchors, clause cards carry `clause-<id>` anchors; the .docx redline embeds plain-text SOURCES blocks (no hyperlinks).
 
 ## Product

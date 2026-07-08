@@ -27,12 +27,19 @@
       animation: cite-flash 1.8s ease-out 1;
     }
     @keyframes cite-flash { 0% { background-color: #cfe2ff; } 100% { background-color: transparent; } }
+    /* ── MVP badge ── */
+    .mvp-sup {
+      font-size: .5em; font-weight: 600; letter-spacing: .08em;
+      color: #ffc107; border: 1px solid rgba(255, 193, 7, .55);
+      border-radius: .5rem; padding: .05em .4em; margin-left: .35em;
+      vertical-align: super;
+    }
   </style>
 </head>
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
   <div class="container-xl">
-    <a class="navbar-brand" href="/">⚖️ Syntra</a>
+    <a class="navbar-brand" href="/">⚖️ Syntra<sup class="mvp-sup">MVP</sup></a>
     {% if user %}
     <div class="navbar-nav ms-auto d-flex flex-row align-items-center gap-3">
       <a class="nav-link text-white-50" href="/contracts"><i class="bi bi-file-text"></i> Contracts</a>
@@ -87,7 +94,55 @@
   {% block content %}{% endblock %}
 </div>
 
+{# ── MVP disclaimer modal — auto-shown after uploads (session one-shot) or on
+     pages that pass show_mvp_modal=True; also intercepts a.mvp-guard links
+     (e.g. .docx downloads) to show the disclaimer before proceeding. ── #}
+<div class="modal fade" id="mvpModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-body p-4 text-center">
+        <i class="bi bi-cone-striped text-warning" style="font-size:2.2rem;"></i>
+        <h5 class="fw-bold mt-2 mb-2">Early prototype (MVP)</h5>
+        <p class="text-muted mb-3">
+          Syntra is an initial prototype and can produce incomplete or incorrect
+          results. Always have a qualified attorney review its analysis, redlines
+          and drafted documents before relying on them.
+        </p>
+        <button type="button" class="btn btn-dark w-100" data-bs-dismiss="modal"
+                id="mvp-continue">I understand</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function () {
+  const modal = new bootstrap.Modal(document.getElementById("mvpModal"));
+  const btn = document.getElementById("mvp-continue");
+  let pendingHref = null;
+  document.addEventListener("click", function (e) {
+    const link = e.target.closest("a.mvp-guard");
+    if (!link) return;
+    e.preventDefault();
+    pendingHref = link.href;
+    btn.textContent = "I understand — continue";
+    modal.show();
+  });
+  btn.addEventListener("click", function () {
+    if (pendingHref) {
+      const href = pendingHref;
+      pendingHref = null;
+      window.location.href = href;
+    }
+  });
+  document.getElementById("mvpModal").addEventListener("hidden.bs.modal", function () {
+    pendingHref = null;
+    btn.textContent = "I understand";
+  });
+  {% if show_mvp_modal %}modal.show();{% endif %}
+})();
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>
