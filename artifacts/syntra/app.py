@@ -38,6 +38,10 @@ UPLOADS.mkdir(exist_ok=True)
 # ── startup / shutdown ────────────────────────────────────────────────────────
 init_db()
 seed_from_file()
+# Pipeline jobs live in an in-memory dict, so a restart strands any doc left in
+# 'processing'. Mark them failed so they can be re-uploaded (dedupe skips errors).
+with get_db() as _db:
+    _db.execute("UPDATE documents SET status='error' WHERE status='processing'")
 atexit.register(dump_to_file)
 
 # ── background job tracker ─────────────────────────────────────────────────────
@@ -243,19 +247,37 @@ def upload():
         if ext not in ("docx", "pdf"):
             flash("Only .docx and .pdf files are supported.")
             return render_template("upload.html", user=current_user())
+        file_bytes = f.read()
+        content_hash = hashlib.sha256(file_bytes).hexdigest()
+        # Same file already analysed (or in flight)? Reuse it instead of
+        # creating a duplicate document + a duplicate pipeline run.
+        with get_db() as db:
+            dup = db.execute(
+                """SELECT doc_id, status FROM documents
+                   WHERE content_hash=? AND status IN ('processing','processed')
+                   ORDER BY uploaded_at DESC LIMIT 1""",
+                (content_hash,),
+            ).fetchone()
+        if dup:
+            flash("This exact file has already been analysed — showing the existing analysis.")
+            target = "processing" if dup["status"] == "processing" else "contract"
+            return redirect(url_for(target, doc_id=dup["doc_id"]))
         doc_id = hashlib.md5(
             (f.filename + str(datetime.datetime.utcnow())).encode()
         ).hexdigest()[:12]
         save_path = UPLOADS / f"{doc_id}.{ext}"
-        f.save(save_path)
+        save_path.write_bytes(file_bytes)
         user = current_user()
         # Insert the document row immediately so the processing page can find it
         with get_db() as db:
             db.execute(
-                "INSERT OR REPLACE INTO documents VALUES (?,?,?,?,?,?,?,?)",
+                """INSERT OR REPLACE INTO documents
+                   (doc_id, source_type, status, side, service_line,
+                    uploaded_by, uploaded_at, filename, content_hash)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
                 (doc_id, ext if ext == "pdf" else "docx", "processing",
                  None, None, user["user_id"],
-                 datetime.datetime.utcnow().isoformat(), f.filename),
+                 datetime.datetime.utcnow().isoformat(), f.filename, content_hash),
             )
         _jobs[doc_id] = {"status": "running", "error": None}
         t = threading.Thread(

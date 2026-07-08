@@ -40,7 +40,8 @@ def init_db():
             service_line TEXT,
             uploaded_by  TEXT,
             uploaded_at  TEXT,
-            filename     TEXT
+            filename     TEXT,
+            content_hash TEXT
         );
         CREATE TABLE IF NOT EXISTS clauses (
             clause_id    TEXT PRIMARY KEY,
@@ -103,6 +104,14 @@ def init_db():
             created_at   TEXT
         );
         """)
+        # Lightweight migrations for databases created before a column existed.
+        for stmt in (
+            "ALTER TABLE documents ADD COLUMN content_hash TEXT",
+        ):
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
 
 def seed_from_file():

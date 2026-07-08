@@ -10,7 +10,7 @@
     </p>
     <div class="card">
       <div class="card-body p-4">
-        <form method="POST" enctype="multipart/form-data">
+        <form method="POST" enctype="multipart/form-data" id="upload-form">
           <div class="mb-4">
             <label class="form-label fw-semibold">Contract file</label>
             <input type="file" class="form-control form-control-lg"
@@ -30,4 +30,12 @@
     <a href="/" class="btn btn-link text-muted mt-2">← Back to dashboard</a>
   </div>
 </div>
+<script>
+  // Prevent duplicate uploads from repeated clicks while the file is in flight.
+  document.getElementById("upload-form").addEventListener("submit", function () {
+    const btn = this.querySelector("button[type=submit]");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Uploading…';
+  });
+</script>
 {% endblock %}
