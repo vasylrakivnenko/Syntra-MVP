@@ -9,6 +9,9 @@
     <small class="text-muted">
       Service:&nbsp;<strong>{{ (doc.service_line or '—').replace('_',' ') | title }}</strong>
       &nbsp;·&nbsp;Side:&nbsp;<strong>{{ side_display(doc.service_line, doc.side) }}</strong>
+      {% if our_party %}
+      &nbsp;·&nbsp;Our party:&nbsp;<strong>{{ our_party.name }}</strong>
+      {% endif %}
       &nbsp;·&nbsp;{{ doc.uploaded_at[:10] if doc.uploaded_at else '—' }}
     </small>
   </div>

@@ -20,6 +20,7 @@ sys.path.insert(0, str(BASE))
 from database import init_db, seed_from_file, dump_to_file, get_db
 from audit import AuditLog
 from pipeline.ingestor import Ingestor
+from pipeline.parties import infer_parties, party_perspective
 from pipeline.segmenter import Segmenter
 from pipeline.chunker import Chunker
 from pipeline.classifier import Classifier
@@ -91,12 +92,18 @@ def _process_verdicts(rows):
 
 
 # ── pipeline runner ───────────────────────────────────────────────────────────
-def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user_id: str):
+def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user_id: str,
+                  our_party: dict | None = None):
     playbook = load_playbook()
     lane_two = LaneTwoAgent()
 
     doc = Ingestor().ingest(path.read_bytes(), source_type, doc_id)
-    segment = Segmenter().segment(doc, playbook)
+    segment = Segmenter().segment(doc, playbook, our_party=our_party)
+    # A confirmed party pins the NDA perspective (mutual/recipient/discloser);
+    # it is stored in documents.side for NDA docs and drives the side pill,
+    # triage display, and Market Lens favorability.
+    if our_party and (segment.service_line or "").startswith("nda"):
+        segment.side = party_perspective(our_party.get("role", ""))
     clauses = Chunker().chunk(doc)
 
     clause_rows, clf_rows, verdict_rows, v_objects = [], [], [], []
@@ -170,8 +177,8 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
                     or (v.branch == "verdict"
                         and v.status in ("unacceptable", "acceptable_deviation"))
                 ]
-                perspective = _NDA_PERSPECTIVE.get(segment.service_line,
-                                                   segment.side or "mutual")
+                perspective = (segment.side if segment.side in NDA_PERSPECTIVES
+                               else _NDA_PERSPECTIVE.get(segment.service_line, "mutual"))
                 report["assessments"] = assess_market_flags(report, perspective,
                                                             playbook_findings)
             except Exception:
@@ -219,10 +226,11 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
             print(f"[market-lens] skipped for {doc_id}:\n{traceback.format_exc()}")
 
 
-def _run_pipeline_bg(doc_id: str, path: Path, source_type: str, filename: str, user_id: str):
+def _run_pipeline_bg(doc_id: str, path: Path, source_type: str, filename: str, user_id: str,
+                     our_party: dict | None = None):
     """Wrapper that runs _run_pipeline in a thread and updates _jobs."""
     try:
-        _run_pipeline(doc_id, path, source_type, filename, user_id)
+        _run_pipeline(doc_id, path, source_type, filename, user_id, our_party=our_party)
         _jobs[doc_id] = {"status": "done", "error": None}
     except Exception:
         err = traceback.format_exc()
@@ -241,12 +249,17 @@ app.add_template_global(NDA_PERSPECTIVES, "NDA_PERSPECTIVES")
 
 @app.template_global("side_display")
 def side_display(service_line, side):
+    # A party-confirmed NDA perspective is stored directly in documents.side.
+    if side in NDA_PERSPECTIVES:
+        return side
     return _NDA_PERSPECTIVE.get(service_line or "", side or "—")
 
 
 @app.template_global("nda_perspective")
-def nda_perspective(service_line):
+def nda_perspective(service_line, side=None):
     """Return the active NDA perspective for a service line, or None if not an NDA."""
+    if side in NDA_PERSPECTIVES:
+        return side
     return _NDA_PERSPECTIVE.get(service_line or "")
 
 
@@ -309,13 +322,14 @@ def upload():
         with get_db() as db:
             dup = db.execute(
                 """SELECT doc_id, status FROM documents
-                   WHERE content_hash=? AND status IN ('processing','processed')
+                   WHERE content_hash=? AND status IN ('processing','processed','awaiting_party')
                    ORDER BY uploaded_at DESC LIMIT 1""",
                 (content_hash,),
             ).fetchone()
         if dup:
             flash("This exact file has already been analysed — showing the existing analysis.")
-            target = "processing" if dup["status"] == "processing" else "contract"
+            target = {"processing": "processing",
+                      "awaiting_party": "select_party"}.get(dup["status"], "contract")
             return redirect(url_for(target, doc_id=dup["doc_id"]))
         doc_id = hashlib.md5(
             (f.filename + str(datetime.datetime.utcnow())).encode()
@@ -323,26 +337,90 @@ def upload():
         save_path = UPLOADS / f"{doc_id}.{ext}"
         save_path.write_bytes(file_bytes)
         user = current_user()
-        # Insert the document row immediately so the processing page can find it
+        source_type = ext if ext == "pdf" else "docx"
+        # Infer the contracting parties (one cheap LLM call) so the uploader
+        # can confirm which one is "us" before analysis. Any failure falls
+        # back to the fully automatic flow — upload never blocks on this.
+        parties: list[dict] = []
+        try:
+            text = Ingestor().ingest(file_bytes, source_type, doc_id).full_text
+            parties = infer_parties(text)
+        except Exception:
+            print(f"[parties] inference failed for {doc_id}:\n{traceback.format_exc()}")
+        awaiting = len(parties) >= 2
+        # Insert the document row immediately so the next page can find it
         with get_db() as db:
             db.execute(
                 """INSERT OR REPLACE INTO documents
                    (doc_id, source_type, status, side, service_line,
-                    uploaded_by, uploaded_at, filename, content_hash)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (doc_id, ext if ext == "pdf" else "docx", "processing",
+                    uploaded_by, uploaded_at, filename, content_hash, parties_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (doc_id, source_type,
+                 "awaiting_party" if awaiting else "processing",
                  None, None, user["user_id"],
-                 datetime.datetime.utcnow().isoformat(), f.filename, content_hash),
+                 datetime.datetime.utcnow().isoformat(), f.filename, content_hash,
+                 json.dumps(parties) if parties else None),
             )
+        if awaiting:
+            return redirect(url_for("select_party", doc_id=doc_id))
         _jobs[doc_id] = {"status": "running", "error": None}
         t = threading.Thread(
             target=_run_pipeline_bg,
-            args=(doc_id, save_path, ext if ext == "pdf" else "docx", f.filename, user["user_id"]),
+            args=(doc_id, save_path, source_type, f.filename, user["user_id"]),
             daemon=True,
         )
         t.start()
         return redirect(url_for("processing", doc_id=doc_id))
     return render_template("upload.html", user=current_user())
+
+
+@app.route("/contracts/<doc_id>/select-party", methods=["GET", "POST"])
+@login_required
+def select_party(doc_id):
+    """Confirm which contracting party is 'us' before the pipeline runs."""
+    with get_db() as db:
+        doc = db.execute("SELECT * FROM documents WHERE doc_id=?", (doc_id,)).fetchone()
+    if not doc:
+        abort(404)
+    if doc["status"] != "awaiting_party":
+        target = "processing" if doc["status"] == "processing" else "contract"
+        return redirect(url_for(target, doc_id=doc_id))
+    try:
+        parties = json.loads(doc["parties_json"] or "[]")
+    except Exception:
+        parties = []
+    if request.method == "POST":
+        choice = request.form.get("party", "skip")
+        our_party = None
+        if choice.isdigit() and int(choice) < len(parties):
+            our_party = parties[int(choice)]
+        user = current_user()
+        with get_db() as db:
+            # Atomic flip guards against a double-POST starting two pipelines.
+            cur = db.execute(
+                """UPDATE documents SET status='processing', our_party=?
+                   WHERE doc_id=? AND status='awaiting_party'""",
+                (json.dumps(our_party) if our_party else None, doc_id),
+            )
+            if cur.rowcount != 1:
+                return redirect(url_for("processing", doc_id=doc_id))
+        AuditLog().append_simple(
+            user["user_id"],
+            "party_confirmed" if our_party else "party_skipped",
+            doc_id,
+        )
+        path = UPLOADS / f"{doc_id}.{doc['source_type']}"
+        _jobs[doc_id] = {"status": "running", "error": None}
+        t = threading.Thread(
+            target=_run_pipeline_bg,
+            args=(doc_id, path, doc["source_type"], doc["filename"],
+                  user["user_id"], our_party),
+            daemon=True,
+        )
+        t.start()
+        return redirect(url_for("processing", doc_id=doc_id))
+    return render_template("select_party.html", doc=doc, parties=parties,
+                           user=current_user())
 
 
 @app.route("/contracts/<doc_id>/processing")
@@ -352,6 +430,8 @@ def processing(doc_id):
         doc = db.execute("SELECT * FROM documents WHERE doc_id=?", (doc_id,)).fetchone()
     if not doc:
         abort(404)
+    if doc["status"] == "awaiting_party":
+        return redirect(url_for("select_party", doc_id=doc_id))
     job = _jobs.get(doc_id, {"status": "done", "error": None})
     if job["status"] == "done":
         return redirect(url_for("contract", doc_id=doc_id))
@@ -387,6 +467,8 @@ def contract(doc_id):
         doc = db.execute("SELECT * FROM documents WHERE doc_id=?", (doc_id,)).fetchone()
         if not doc:
             abort(404)
+        if doc["status"] == "awaiting_party":
+            return redirect(url_for("select_party", doc_id=doc_id))
         rows = db.execute(
             """SELECT v.*, c.text AS clause_text, cl.clause_type, cl.confidence
                FROM verdicts v
@@ -409,9 +491,15 @@ def contract(doc_id):
             market = json.loads(mr["report_json"])
         except Exception:
             market = None
+    our_party = None
+    if doc["our_party"]:
+        try:
+            our_party = json.loads(doc["our_party"])
+        except Exception:
+            our_party = None
     redline_available = (UPLOADS / f"{doc_id}_redline.docx").exists()
     return render_template("contract.html", doc=doc, verdicts=verdicts, queue_item=queue_item,
-                           market=market,
+                           market=market, our_party=our_party,
                            redline_available=redline_available, user=current_user())
 
 

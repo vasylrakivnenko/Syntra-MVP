@@ -4,6 +4,10 @@ import openai
 
 MODEL = os.environ.get("LLM_MODEL", "gpt-5.1")
 
+# High-volume / low-stakes calls (favorability assessment, party inference)
+# ride a cheap model by default.
+LIGHT_MODEL = os.environ.get("LLM_LIGHT_MODEL", "gpt-5.4-mini")
+
 
 def get_client() -> openai.OpenAI:
     api_key = (

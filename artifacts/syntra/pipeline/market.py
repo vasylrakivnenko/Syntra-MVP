@@ -46,7 +46,7 @@ MARKET_TABLE = Path(__file__).resolve().parent.parent / "market_data" / "market.
 _MAX_DOC_CHARS = 60_000
 
 # Favorability assessment is high-volume/low-stakes → cheap model by default.
-LIGHT_MODEL = os.environ.get("LLM_LIGHT_MODEL", "gpt-5.4-mini")
+from llm import LIGHT_MODEL
 
 _FAVORABILITY_VALUES = ("favorable", "unfavorable", "neutral", "unclear")
 

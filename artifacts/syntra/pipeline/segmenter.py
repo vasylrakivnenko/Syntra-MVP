@@ -6,7 +6,8 @@ from models import Document, Segment, Playbook
 
 
 class Segmenter:
-    def segment(self, doc: Document, playbook: Optional[Playbook] = None) -> Segment:
+    def segment(self, doc: Document, playbook: Optional[Playbook] = None,
+                our_party: Optional[dict] = None) -> Segment:
         from llm import get_client, MODEL, llm_available
 
         if not llm_available():
@@ -39,11 +40,23 @@ class Segmenter:
                 "e.g. 'nda', 'it_services', 'general_supplier'.\n"
             )
 
+        # When the uploader confirmed which contracting party is "us", anchor
+        # the analysis to that party instead of guessing the subject organisation.
+        party_line = ""
+        if our_party and our_party.get("name"):
+            party_line = (
+                f"\nThe organisation we represent (\"our side\") is: {our_party['name']}"
+                + (f" — identified in the contract as: {our_party['role']}."
+                   if our_party.get("role") else ".")
+                + "\nAnswer SIDE and SERVICE_LINE strictly from this party's perspective.\n"
+            )
+
         prompt = (
             "You are a contract analyst. Read the following contract excerpt and determine:\n"
             "1. SIDE: Is the subject organisation the BUYER of a service ('supplier') "
             "or the SELLER of a service ('customer')?\n"
-            f"{service_line_instr}\n"
+            f"{service_line_instr}"
+            f"{party_line}\n"
             f"CONTRACT:\n{sample}\n\n"
             "Return JSON:\n"
             '{"side":"supplier|customer","service_line":"<id>","confidence":0.0,"reasoning":"<one sentence>"}'

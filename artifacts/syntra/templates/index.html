@@ -61,7 +61,7 @@
         {% if d.status == 'error' %}
         <span class="badge bg-danger">Error</span>
         {% elif d.status != 'processed' %}
-        <span class="badge bg-secondary">{{ d.status | title }}</span>
+        <span class="badge bg-secondary">{{ d.status | replace('_', ' ') | title }}</span>
         {% elif d.review_status == 'pending' %}
         <a href="/queue" class="text-decoration-none"><span class="badge bg-warning text-dark"><i class="bi bi-person-exclamation me-1"></i>Attorney review</span></a>
         {% elif d.review_status == 'approved' %}
