@@ -114,6 +114,7 @@ def init_db():
             "ALTER TABLE queue_items ADD COLUMN reviewed_at TEXT",
             "ALTER TABLE queue_items ADD COLUMN reviewed_by TEXT",
             "ALTER TABLE queue_items ADD COLUMN acknowledged_at TEXT",
+            "ALTER TABLE verdicts ADD COLUMN cited_position TEXT",
         ):
             try:
                 conn.execute(stmt)

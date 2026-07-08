@@ -40,7 +40,9 @@ class Triage:
             )
 
         # 4. Two-axis deterministic lookup
-        position = playbook.lookup(segment.service_line, classification.clause_type)
+        position, resolved_sl = playbook.lookup_resolved(
+            segment.service_line, classification.clause_type
+        )
         policy = playbook.get_policy_by_clause_type(classification.clause_type)
 
         if position is None:
@@ -52,6 +54,15 @@ class Triage:
                         f"defined for service line '{segment.service_line}'"
                     ),
                     service_line=segment.service_line,
+                    cited_position={
+                        "policy_id": policy.id,
+                        "policy_label": policy.label,
+                        "clause_type": classification.clause_type,
+                        "service_line": segment.service_line,
+                        "required": True,
+                        "playbook_version": playbook.version,
+                        "as_of": "analysis",
+                    },
                 )
             return ClauseVerdict(
                 clause_id=clause.id, branch="abstain",
@@ -59,8 +70,23 @@ class Triage:
                 service_line=segment.service_line,
             )
 
+        # Snapshot the exact position this clause is judged against, so the
+        # citation survives later playbook edits (e.g. promote-to-fallback).
+        cited_position = {
+            "rule_id": position.id,
+            "policy_id": policy.id if policy else None,
+            "policy_label": policy.label if policy else classification.clause_type,
+            "clause_type": classification.clause_type,
+            "service_line": resolved_sl,
+            "preferred": position.preferred,
+            "fallback": position.fallback,
+            "walk_away": position.walk_away,
+            "playbook_version": playbook.version,
+            "as_of": "analysis",
+        }
+
         # 5. LLM compliance judgment
-        return self._compare(clause, classification, position, segment)
+        return self._compare(clause, classification, position, segment, cited_position)
 
     def _compare(
         self,
@@ -68,6 +94,7 @@ class Triage:
         classification: Classification,
         position: Position,
         segment: Segment,
+        cited_position: dict | None = None,
     ) -> ClauseVerdict:
         from llm import get_client, MODEL, llm_available
 
@@ -122,6 +149,7 @@ class Triage:
                 rationale=r.get("rationale", ""),
                 suggested_text=r.get("suggested_text", ""),
                 service_line=segment.service_line,
+                cited_position=cited_position,
             )
         except Exception as exc:
             return ClauseVerdict(

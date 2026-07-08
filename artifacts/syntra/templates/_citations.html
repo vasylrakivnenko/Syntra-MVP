@@ -1,0 +1,56 @@
+{# Shared citation macros — every redline / risk flag cites its sources:
+   the playbook position (company policy) it was judged against and the
+   counterparty clause it came from. Used by contract.html and review.html. #}
+
+{% macro sources(v, link_prefix='') %}
+{% set cp = v.cited_position %}
+{% if cp or (v.branch != 'abstain' and v.clause_id) %}
+<div class="mt-1 citation-block">
+  <small class="text-muted fw-semibold me-1"><i class="bi bi-link-45deg"></i> Sources:</small>
+
+  {# ── company playbook / policy citation ── #}
+  {% if cp %}
+  <details class="d-inline-block align-middle citation-details">
+    <summary class="d-inline">
+      <a href="/playbook#pos-{{ cp.service_line }}-{{ cp.policy_id }}"
+         class="badge rounded-pill bg-primary-subtle text-primary-emphasis border border-primary-subtle text-decoration-none"
+         title="Open this position in the playbook matrix">
+        <i class="bi bi-journal-bookmark"></i>
+        {{ cp.rule_id or cp.policy_label }}{% if cp.rule_id %} · {{ cp.policy_label }}{% endif %}
+      </a>
+      <span class="text-muted citation-hint">quote ▾</span>
+    </summary>
+    <div class="border rounded p-2 mt-1 mb-1 small bg-light citation-quote">
+      {% if cp.required and not cp.rule_id %}
+      <div><span class="fw-semibold text-danger">Required policy:</span>
+        “{{ cp.policy_label }}” must be addressed — no position defined for
+        service line <code>{{ cp.service_line }}</code>.</div>
+      {% else %}
+      {% if cp.preferred %}<div><span class="fw-semibold text-success">Preferred:</span> “{{ cp.preferred }}”</div>{% endif %}
+      {% if cp.fallback %}<div><span class="fw-semibold">Fallback:</span> “{{ cp.fallback }}”</div>{% endif %}
+      {% if cp.walk_away %}<div><span class="fw-semibold text-danger">Walk-away:</span> “{{ cp.walk_away }}”</div>{% endif %}
+      {% endif %}
+      <div class="text-muted mt-1">
+        {% if cp.as_of == 'current' %}
+        Current playbook v{{ cp.playbook_version }} (analyzed before citation snapshots — position may have changed since analysis).
+        {% else %}
+        Playbook v{{ cp.playbook_version }}, as of analysis.
+        {% endif %}
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
+  {# ── counterparty document clause citation ──
+     Silence verdicts also carry a real clause (the gap is in OUR playbook,
+     not the document), so they get the same clause chip. #}
+  {% if v.clause_id %}
+  <a href="{{ link_prefix }}#clause-{{ v.clause_id }}"
+     class="badge rounded-pill bg-secondary-subtle text-secondary-emphasis border text-decoration-none"
+     title="Jump to the cited clause in the counterparty document">
+    <i class="bi bi-file-earmark-text"></i> Counterparty clause ¶
+  </a>
+  {% endif %}
+</div>
+{% endif %}
+{% endmacro %}

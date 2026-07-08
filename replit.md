@@ -33,6 +33,9 @@ Syntra provides SMBs and mid-market companies with high quality legal support an
 - AuditLog opens its own SQLite connection; audit calls must happen AFTER `with get_db()` write blocks commit, or SQLite locks ("database is locked").
 - Templates share urgency/deadline chips via `templates/_chips.html` macros — edit there, not inline.
 - Role-aware inbox bell is injected via `@app.context_processor` (attorney → pending queue items; operator → unacknowledged decisions on own uploads).
+- Grounded citations: triage snapshots the exact playbook position into `verdicts.cited_position` at analysis time (`as_of:"analysis"`) so citations survive playbook edits; rows analyzed before the feature are backfilled on read from the CURRENT playbook (`as_of:"current"`, labeled as such in the UI). Abstains are intentionally uncited.
+- "Silence" verdicts mean the clause EXISTS but the playbook has no position for it (gap is in OUR playbook, not the document) — citation UIs must link the clause, not claim it's missing.
+- Citation UI is shared via `templates/_citations.html` macro (`link_prefix` arg for cross-page use); playbook matrix cells carry unconditional `pos-<sl>-<policy>` anchors, clause cards carry `clause-<id>` anchors; the .docx redline embeds plain-text SOURCES blocks (no hyperlinks).
 
 ## Product
 

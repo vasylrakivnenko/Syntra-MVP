@@ -77,7 +77,17 @@ class Playbook(BaseModel):
         return next((sl for sl in self.service_lines if sl.id == service_line_id), None)
 
     def lookup(self, service_line_id: str, clause_type: str) -> Optional[Position]:
-        """Two-axis deterministic lookup: playbook[service_line][clause_type].
+        """Two-axis deterministic lookup: playbook[service_line][clause_type]."""
+        position, _ = self.lookup_resolved(service_line_id, clause_type)
+        return position
+
+    def lookup_resolved(
+        self, service_line_id: str, clause_type: str
+    ) -> tuple[Optional[Position], Optional[str]]:
+        """Like lookup(), but also returns the service-line id of the row where the
+        position actually lives (differs from the requested row when the lookup falls
+        back to general_supplier / general_customer). Citations must point at the
+        resolved row, not the requested one.
 
         If the specific service line has no position for this clause type, fall back
         to the general row for the same side (general_supplier / general_customer) so
@@ -86,19 +96,21 @@ class Playbook(BaseModel):
         """
         policy = self.get_policy_by_clause_type(clause_type)
         if policy is None:
-            return None
+            return None, None
         sl = self.get_service_line(service_line_id)
         if sl is None:
-            return None
+            return None, None
         position = sl.positions.get(policy.id)
         if position is not None:
-            return position
+            return position, sl.id
         general_id = "general_customer" if sl.side == "customer" else "general_supplier"
         if general_id != service_line_id:
             general = self.get_service_line(general_id)
             if general is not None:
-                return general.positions.get(policy.id)
-        return None
+                position = general.positions.get(policy.id)
+                if position is not None:
+                    return position, general.id
+        return None, None
 
 
 class ClauseVerdict(BaseModel):
@@ -111,6 +123,10 @@ class ClauseVerdict(BaseModel):
     reason: Optional[str] = None # for abstain / silence
     service_line: Optional[str] = None
     suggested_text: str = ""
+    # Snapshot of the playbook position (or required policy, for silence) this
+    # verdict was judged against, captured at analysis time so citations stay
+    # accurate even after the playbook is edited. See Triage for the shape.
+    cited_position: Optional[dict] = None
 
 
 class QueueItem(BaseModel):

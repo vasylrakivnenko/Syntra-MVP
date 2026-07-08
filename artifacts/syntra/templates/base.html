@@ -17,6 +17,16 @@
     .verdict-abstain             { border-left: 4px solid #adb5bd; background: #fafafa; }
     .matrix-table td, .matrix-table th { vertical-align: middle; }
     .card { border: none; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    /* ── grounded citations ── */
+    .citation-details summary { cursor: pointer; list-style: none; display: inline; }
+    .citation-details summary::-webkit-details-marker { display: none; }
+    .citation-hint { font-size: .72rem; }
+    :target { scroll-margin-top: 90px; }
+    .card:target, .matrix-table td:target {
+      outline: 2px solid #0d6efd; outline-offset: 2px;
+      animation: cite-flash 1.8s ease-out 1;
+    }
+    @keyframes cite-flash { 0% { background-color: #cfe2ff; } 100% { background-color: transparent; } }
   </style>
 </head>
 <body>

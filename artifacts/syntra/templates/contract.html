@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_chips.html" as chips %}
+{% import "_citations.html" as cite %}
 {% block title %}Contract Review — Syntra{% endblock %}
 {% block content %}
 
@@ -103,9 +104,22 @@
       {% for v in (issues + silences)[:6] %}
       <div class="d-flex align-items-start gap-2 mb-2 ps-2 border-start border-3 border-{{ 'danger' if v.status == 'unacceptable' or v.branch == 'silence' else 'warning' }}">
         <div>
+          {% if v.clause_id %}
+          <a href="#clause-{{ v.clause_id }}" class="fw-semibold small text-decoration-none">
+            {{ (v.clause_type or v.branch or '').replace('_',' ') | title }} ↓
+          </a>
+          {% else %}
           <span class="fw-semibold small">{{ (v.clause_type or v.branch or '').replace('_',' ') | title }}</span>
+          {% endif %}
           {% if v.rationale %}<span class="text-muted small"> — {{ v.rationale }}</span>{% endif %}
           {% if v.reason %}<span class="text-muted small"> — {{ v.reason }}</span>{% endif %}
+          {% if v.cited_position %}
+          <a href="/playbook#pos-{{ v.cited_position.service_line }}-{{ v.cited_position.policy_id }}"
+             class="small text-decoration-none text-nowrap"
+             title="Open the cited playbook position">
+            <i class="bi bi-journal-bookmark"></i> {{ v.cited_position.rule_id or v.cited_position.policy_label }}
+          </a>
+          {% endif %}
         </div>
       </div>
       {% endfor %}
@@ -160,6 +174,14 @@
             {% if a.covered_by_playbook %}<span class="badge bg-dark">already in playbook findings</span>{% endif %}
             {{ a.label }}
             {% if a.rationale %}<div class="text-muted">{{ a.rationale }}</div>{% endif %}
+            {% if a.fields and market.evidence %}
+              {% for fid in a.fields if market.evidence.get(fid) %}
+              <div class="text-muted fst-italic ps-2 border-start border-2">
+                <i class="bi bi-file-earmark-text"></i>
+                Document evidence ({{ fid.replace('_',' ') }}): “{{ market.evidence[fid] }}”
+              </div>
+              {% endfor %}
+            {% endif %}
           </li>
           {% endfor %}
         </ul>
@@ -171,7 +193,16 @@
         — rare among comparable NDAs:
         <ul class="mb-0 mt-1 small">
           {% for c in flagged[:5] %}
-          <li>{{ c.label }} — only <strong>{{ c.count }} of {{ c.n }}</strong> comparable NDAs ({{ c.share }}%)</li>
+          <li>{{ c.label }} — only <strong>{{ c.count }} of {{ c.n }}</strong> comparable NDAs ({{ c.share }}%)
+            {% if c.fields and market.evidence %}
+              {% for fid in c.fields if market.evidence.get(fid) %}
+              <div class="text-muted fst-italic ps-2 border-start border-2">
+                <i class="bi bi-file-earmark-text"></i>
+                Document evidence ({{ fid.replace('_',' ') }}): “{{ market.evidence[fid] }}”
+              </div>
+              {% endfor %}
+            {% endif %}
+          </li>
           {% endfor %}
         </ul>
       </div>
@@ -214,7 +245,7 @@
 
 {% for v in verdicts %}
 {% if v.branch != 'abstain' or loop.index <= 5 %}
-<div class="card mb-2 verdict-{{ v.status or v.branch }}">
+<div class="card mb-2 verdict-{{ v.status or v.branch }}" id="clause-{{ v.clause_id }}">
   <div class="card-body py-2 px-3">
     <div class="d-flex justify-content-between align-items-start">
       <small class="text-muted">{{ (v.clause_type or '').replace('_',' ') | title }}</small>
@@ -231,9 +262,7 @@
     {% if v.reason %}
     <small class="text-muted fst-italic">{{ v.reason }}</small>
     {% endif %}
-    {% if v.rule_ids %}
-    <div class="mt-1"><small class="text-muted">Rule: <code>{{ v.rule_ids | join(', ') }}</code></small></div>
-    {% endif %}
+    {{ cite.sources(v) }}
     {% if v.suggested_text %}
     <div class="mt-1 p-1 bg-light rounded border-start border-primary border-3">
       <small class="text-primary"><i class="bi bi-pencil-square me-1"></i><strong>Suggestion:</strong> {{ v.suggested_text }}</small>

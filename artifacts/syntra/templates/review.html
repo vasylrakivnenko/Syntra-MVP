@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_chips.html" as chips %}
+{% import "_citations.html" as cite %}
 {% block title %}Attorney Review — Syntra{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -44,6 +45,7 @@
           {% if v.reason %}
           <small class="text-muted fst-italic">{{ v.reason }}</small>
           {% endif %}
+          {{ cite.sources(v, link_prefix='/contracts/' ~ item.doc_id) }}
           {% if v.suggested_text %}
           <div class="mt-1 p-1 bg-light rounded border-start border-primary border-3">
             <small class="text-primary"><i class="bi bi-pencil-square me-1"></i>{{ v.suggested_text }}</small>

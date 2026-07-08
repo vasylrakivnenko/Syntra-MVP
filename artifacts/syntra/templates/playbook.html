@@ -64,7 +64,9 @@
     </td>
     {% for policy in playbook.policies %}
     {% set cell = sl.positions.get(policy.id) %}
-    <td>
+    {# Anchor id on every cell (including gaps) — citation links from findings
+       land here, e.g. /playbook#pos-general_supplier-liability #}
+    <td id="pos-{{ sl.id }}-{{ policy.id }}">
       {% if cell %}
       <div class="small text-success fw-semibold">
         {{ cell.preferred[:55] }}{% if cell.preferred | length > 55 %}…{% endif %}

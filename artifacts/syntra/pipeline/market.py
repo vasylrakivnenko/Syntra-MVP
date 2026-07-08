@@ -152,6 +152,9 @@ def score_market_row(row: dict[str, Any], meta: dict[str, Any] | None = None,
     contributions = [
         {
             "label": _combo_label(c.combo),
+            # Field ids behind the combo — used to cite the document evidence
+            # spans (report["evidence"]) that grounded each flagged combination.
+            "fields": [tok.partition("=")[0] for tok in c.combo],
             "count": c.count,
             "n": off.segment_n,
             "share": round(c.support * 100, 1),
@@ -243,6 +246,7 @@ def assess_market_flags(report: dict[str, Any], perspective: str,
         fav = a.get("favorability")
         out.append({
             "label": c["label"],
+            "fields": c.get("fields", []),
             "favorability": fav if fav in _FAVORABILITY_VALUES else "unclear",
             "covered_by_playbook": bool(a.get("covered_by_playbook", False)),
             "rationale": str(a.get("rationale", ""))[:300],

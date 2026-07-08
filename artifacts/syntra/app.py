@@ -87,8 +87,48 @@ def _process_verdicts(rows):
             d["rule_ids"] = json.loads(d.get("rule_ids") or "[]")
         except Exception:
             d["rule_ids"] = []
+        try:
+            raw = d.get("cited_position")
+            d["cited_position"] = json.loads(raw) if raw else None
+        except Exception:
+            d["cited_position"] = None
         out.append(d)
-    return out
+    return _enrich_citations(out)
+
+
+def _enrich_citations(verdicts):
+    """Rows analyzed before citation snapshots existed get a best-effort
+    citation from the CURRENT playbook, labeled as_of='current' so templates
+    can distinguish it from an at-analysis snapshot."""
+    if all(d.get("cited_position") or not d.get("rule_ids") for d in verdicts):
+        return verdicts
+    playbook = load_playbook()
+    positions = {}  # rule_id -> (service_line, policy_id, position)
+    for sl in playbook.service_lines:
+        for pol_id, pos in sl.positions.items():
+            positions.setdefault(pos.id, (sl, pol_id, pos))
+    policies = {p.id: p for p in playbook.policies}
+    for d in verdicts:
+        if d.get("cited_position") or not d.get("rule_ids"):
+            continue
+        hit = positions.get(d["rule_ids"][0])
+        if not hit:
+            continue
+        sl, pol_id, pos = hit
+        policy = policies.get(pol_id)
+        d["cited_position"] = {
+            "rule_id": pos.id,
+            "policy_id": pol_id,
+            "policy_label": policy.label if policy else pol_id,
+            "clause_type": policy.clause_type if policy else d.get("clause_type"),
+            "service_line": sl.id,
+            "preferred": pos.preferred,
+            "fallback": pos.fallback,
+            "walk_away": pos.walk_away,
+            "playbook_version": playbook.version,
+            "as_of": "current",
+        }
+    return verdicts
 
 
 # ── pipeline runner ───────────────────────────────────────────────────────────
@@ -127,9 +167,10 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
             verdict.clause_id, doc_id, verdict.branch, verdict.status,
             json.dumps(verdict.rule_ids), verdict.rationale, verdict.reason,
             verdict.service_line, rw, verdict.suggested_text or "",
+            json.dumps(verdict.cited_position) if verdict.cited_position else None,
         ))
 
-    redline_bytes = Redliner().redline(doc, v_objects)
+    redline_bytes = Redliner().redline(doc, v_objects, clauses)
     (UPLOADS / f"{doc_id}_redline.docx").write_bytes(redline_bytes)
 
     queue_items = Router().route(doc_id, v_objects)
@@ -137,7 +178,13 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
     with get_db() as db:
         db.executemany("INSERT OR REPLACE INTO clauses VALUES (?,?,?,?,?,?)", clause_rows)
         db.executemany("INSERT OR REPLACE INTO classifications VALUES (?,?,?,?)", clf_rows)
-        db.executemany("INSERT OR REPLACE INTO verdicts VALUES (?,?,?,?,?,?,?,?,?,?)", verdict_rows)
+        db.executemany(
+            """INSERT OR REPLACE INTO verdicts
+               (clause_id, doc_id, branch, status, rule_ids, rationale, reason,
+                service_line, risk_weight, suggested_text, cited_position)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            verdict_rows,
+        )
         # Reprocessing must not leave stale pending queue items behind.
         db.execute("DELETE FROM queue_items WHERE doc_id=? AND status='pending'", (doc_id,))
         for qi in queue_items:

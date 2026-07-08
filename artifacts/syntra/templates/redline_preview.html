@@ -73,7 +73,14 @@
         {{ (v.clause_type or '').replace('_',' ') | title }}
       </span>
     </div>
-    {% if v.rule_ids %}
+    {% if v.cited_position %}
+    <a href="/playbook#pos-{{ v.cited_position.service_line }}-{{ v.cited_position.policy_id }}"
+       class="small text-decoration-none text-nowrap"
+       title="Open the cited playbook position (v{{ v.cited_position.playbook_version }})">
+      <i class="bi bi-journal-bookmark"></i>
+      {{ v.cited_position.rule_id or v.cited_position.policy_label }}
+    </a>
+    {% elif v.rule_ids %}
     <small class="text-muted">Rule: <code>{{ v.rule_ids | join(', ') }}</code></small>
     {% endif %}
   </div>
