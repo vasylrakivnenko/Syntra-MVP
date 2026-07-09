@@ -4,10 +4,93 @@
 {% block title %}Contract Review — Syntra{% endblock %}
 {% block content %}
 
-{# ── header ── #}
+<style>
+  /* ── contract review page — decision surface, 920px column ── */
+  .review-wrap { max-width: 920px; margin: 0 auto; font-size: 15px; line-height: 1.6; }
+  .review-wrap .card { border-radius: .6rem; }
+
+  .cat-badge { display: inline-block; font-size: 11px; letter-spacing: .04em;
+               text-transform: uppercase; font-weight: 600; padding: .3em .65em;
+               border-radius: .35rem; white-space: nowrap; line-height: 1.4; }
+  .cat-badge-danger  { background: #dc3545; color: #fff; }
+  .cat-badge-warning { background: #ffe8cc; color: #8a4b00; }
+  .cat-badge-success { background: #d1e7dd; color: #0f5132; }
+  .cat-badge-muted   { background: #e9ecef; color: #495057; }
+
+  .decision-card { padding: 24px; }
+  .decision-headline { font-size: 1.55rem; font-weight: 700; letter-spacing: -.3px; margin: 0; }
+  .blocker-inset { border-left: 4px solid #dc3545; background: #fff8f8;
+                   padding: .8rem 1rem; border-radius: .35rem; }
+  .fix-inset { border-left: 4px solid #0d6efd; background: #f2f7ff;
+               padding: .8rem 1rem; border-radius: .35rem; }
+  .inset-label { font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
+                 font-weight: 700; color: #6c757d; display: block; margin-bottom: .15rem; }
+
+  .clause-card { background: #fff; border-radius: .6rem; margin-bottom: 12px;
+                 box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+  .clause-card.accent-danger  { border-left: 4px solid #dc3545; }
+  .clause-card.accent-warning { border-left: 4px solid #fd7e14; }
+  .clause-card > summary { list-style: none; cursor: pointer; padding: 20px 24px; }
+  .clause-card > summary::-webkit-details-marker { display: none; }
+  .clause-card .clause-title { font-weight: 600; }
+  .clause-card .takeaway { font-size: 15px; font-weight: 500; margin-top: .3rem; color: #343a40; }
+  .clause-card[open] > summary { padding-bottom: 8px; }
+  .clause-card[open] > summary .takeaway { display: none; }
+  .clause-card .clause-body { padding: 0 24px 20px; }
+  .clause-card:target { outline: 2px solid #0d6efd; outline-offset: 2px; }
+  .excerpt { font-size: 13px; color: #6c757d; background: #f8f9fa;
+             border-radius: .4rem; padding: .6rem .8rem; margin-bottom: .75rem;
+             white-space: pre-line; }
+  .analysis { font-size: 15px; margin-bottom: .5rem; }
+  .source-line { font-size: 13px; color: #6c757d; margin-top: .5rem; }
+  .source-line a { color: #6c757d; }
+
+  .group-head { font-size: 12px; letter-spacing: .05em; text-transform: uppercase;
+                color: #6c757d; font-weight: 700; margin: 1.4rem 0 .6rem; }
+  .group-toggle { background: none; border: none; color: #0d6efd; font-size: 14px;
+                  padding: .2rem 0; }
+
+  .filter-seg { display: inline-flex; flex-wrap: wrap; gap: 0; border: 1px solid #dee2e6;
+                border-radius: .5rem; overflow: hidden; background: #fff; }
+  .filter-seg button { border: none; background: #fff; padding: .35rem .8rem;
+                       font-size: 13px; color: #495057; border-right: 1px solid #dee2e6; }
+  .filter-seg button:last-child { border-right: none; }
+  .filter-seg button.active { background: #212529; color: #fff; }
+
+  .market-row { display: flex; gap: .9rem; padding: .4rem 0; align-items: baseline; }
+  .mkt-label { flex: 0 0 190px; font-size: 11px; letter-spacing: .05em;
+               text-transform: uppercase; color: #6c757d; font-weight: 700; }
+  .mkt-rare { color: #6c757d; font-size: 12px; border: 1px solid #dee2e6;
+              border-radius: 1rem; padding: 0 .55rem; white-space: nowrap; cursor: help; }
+
+  .preamble-row { color: #6c757d; font-size: 13px; margin-top: 1rem; }
+  .preamble-row summary { cursor: pointer; }
+
+  #sticky-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 1040;
+                background: #fff; box-shadow: 0 1px 8px rgba(0,0,0,.14); }
+  #sticky-bar .sticky-inner { max-width: 920px; margin: 0 auto; display: flex;
+                              align-items: center; gap: .9rem; padding: .5rem 1rem; }
+</style>
+
+{# ── sticky slim header — appears when the decision card scrolls away ── #}
+<div id="sticky-bar" class="d-none">
+  <div class="sticky-inner">
+    <span class="fw-semibold text-truncate" style="max-width: 340px;">{{ doc.filename }}</span>
+    <span class="cat-badge cat-badge-{{ view.tone if view.tone in ('danger','warning','success') else 'muted' }}">{{ view.headline }}</span>
+    {% if redline_available %}
+    <a href="/contracts/{{ doc.doc_id }}/redline-preview" class="btn btn-dark btn-sm ms-auto text-nowrap">
+      Apply fix &amp; preview redline
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="review-wrap">
+
+{# ── page header ── #}
 <div class="d-flex justify-content-between align-items-start mb-3">
   <div>
-    <h3 class="fw-bold mb-0 d-inline-block me-2">{{ doc.filename }}</h3>
+    <h4 class="fw-bold mb-0 d-inline-block me-2">{{ doc.filename }}</h4>
     {{ chips.version_badge(doc.version) }}
     {{ chips.urgency_badge(doc.urgency) }}
     {{ chips.deadline_chip(doc.needed_by) }}
@@ -20,20 +103,10 @@
       &nbsp;·&nbsp;{{ doc.uploaded_at[:10] if doc.uploaded_at else '—' }}
     </small>
   </div>
-  <div class="d-flex gap-2 flex-wrap">
-    {% if redline_available %}
-    <a href="/contracts/{{ doc.doc_id }}/redline-preview" class="btn btn-danger btn-sm">
-      <i class="bi bi-pencil-square me-1"></i>Preview Redline
-    </a>
-    <a href="/contracts/{{ doc.doc_id }}/download" class="btn btn-outline-success btn-sm mvp-guard">
-      <i class="bi bi-file-earmark-word me-1"></i>Download .docx
-    </a>
-    {% endif %}
-    <a href="/contracts" class="btn btn-outline-secondary btn-sm">← All contracts</a>
-  </div>
+  <a href="/contracts" class="btn btn-outline-secondary btn-sm text-nowrap">← All contracts</a>
 </div>
 
-{# ── review routing banner — superseded takes precedence over everything ── #}
+{# ── superseded notice — historical versions take precedence over everything ── #}
 {% if not is_latest %}
 <div class="alert alert-secondary d-flex justify-content-between align-items-center py-2 mb-3">
   <span><i class="bi bi-layers me-1"></i><strong>Superseded</strong> —
@@ -42,36 +115,295 @@
   <a href="/contracts/{{ latest.doc_id }}" class="btn btn-sm btn-outline-dark text-nowrap ms-3">
     View latest (v{{ latest.version }}) →</a>
 </div>
-{% elif queue_item and queue_item.status == 'pending' %}
-<div class="alert alert-warning d-flex justify-content-between align-items-center py-2 mb-3">
-  <span><i class="bi bi-person-exclamation me-1"></i><strong>Escalated to attorney review</strong> — {{ queue_item.reason or 'findings' }} — attorney sign-off required before this contract can proceed.</span>
-  <a href="/queue" class="btn btn-sm btn-outline-dark text-nowrap ms-3">View queue →</a>
+{% endif %}
+
+{# ── decision card (hero) — verdict, blocker, fix, actions, status ── #}
+<div class="card decision-card mb-4" id="decision-card">
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-2">
+    <h2 class="decision-headline">{{ view.headline }}</h2>
+    {% if queue_item and queue_item.status == 'pending' %}
+    <span class="cat-badge cat-badge-warning">Attorney sign-off required
+      · <a href="/queue" class="text-reset">View queue →</a></span>
+    {% elif queue_item and queue_item.status == 'approved' %}
+    <span class="cat-badge cat-badge-success">Approved by attorney</span>
+    {% elif queue_item and queue_item.status == 'rejected' %}
+    <span class="cat-badge cat-badge-warning">Attorney requested changes</span>
+    {% elif doc.status == 'processed' %}
+    <span class="cat-badge cat-badge-success">No attorney review needed</span>
+    {% elif doc.status %}
+    <span class="cat-badge cat-badge-muted">{{ doc.status | replace('_',' ') | title }}</span>
+    {% endif %}
+  </div>
+
+  {% if view.blocker %}
+  <div class="blocker-inset mb-3">
+    {{ view.blocker.sentence }}
+    <small class="d-block mt-1">
+      {% if view.blocker.rule_id and view.blocker.rule_href %}
+      <a href="{{ view.blocker.rule_href }}" class="text-muted">Playbook rule {{ view.blocker.rule_id }}</a> ·
+      {% endif %}
+      <a href="#clause-{{ view.blocker.clause_id }}" class="text-muted">See the clause ↓</a>
+    </small>
+  </div>
+  {% endif %}
+
+  {% if view.fix %}
+  <div class="fix-inset mb-3">
+    <span class="inset-label">Recommended fix</span>
+    {{ view.fix.text }}
+  </div>
+  {% endif %}
+
+  <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+    {% if redline_available %}
+    <a href="/contracts/{{ doc.doc_id }}/redline-preview" class="btn btn-dark">
+      Apply fix &amp; preview redline
+    </a>
+    <a href="/contracts/{{ doc.doc_id }}/download" class="btn btn-link text-muted mvp-guard">
+      <i class="bi bi-file-earmark-word me-1"></i>Download .docx
+    </a>
+    {% endif %}
+    {% if queue_item and queue_item.status == 'rejected' %}
+    <a href="/upload?case={{ doc.case_id }}" class="btn btn-outline-dark">
+      Upload revised version →
+    </a>
+    {% endif %}
+  </div>
+
+  {% if queue_item and queue_item.status in ('approved', 'rejected') %}
+  <small class="text-muted d-block mb-1">
+    {% if queue_item.status == 'approved' %}
+    Approved{% if queue_item.reviewed_by %} by {{ queue_item.reviewed_by }}{% endif %}{% if queue_item.reviewed_at %} on {{ queue_item.reviewed_at[:10] }}{% endif %}
+    {%- if queue_item.attorney_notes %} — “{{ queue_item.attorney_notes }}”{% endif %} —
+    cleared to send the redline to the counterparty.
+    {% else %}
+    Rejected{% if queue_item.reviewed_by %} by {{ queue_item.reviewed_by }}{% endif %}{% if queue_item.reviewed_at %} on {{ queue_item.reviewed_at[:10] }}{% endif %}
+    {%- if queue_item.attorney_notes %} — “{{ queue_item.attorney_notes }}”{% endif %} —
+    address the notes with the counterparty, then upload the revised version.
+    {% endif %}
+  </small>
+  {% endif %}
+
+  {% if view.summary_line %}
+  <small class="text-muted d-block">{{ view.summary_line | capitalize }}.</small>
+  {% endif %}
 </div>
-{% elif queue_item and queue_item.status == 'approved' %}
-<div class="alert alert-success py-2 mb-3">
-  <i class="bi bi-check2-circle me-1"></i><strong>Approved by attorney</strong>
-  {%- if queue_item.reviewed_by %} ({{ queue_item.reviewed_by }}{% if queue_item.reviewed_at %}, {{ queue_item.reviewed_at[:10] }}{% endif %}){% endif %}
-  {%- if queue_item.attorney_notes %} — {{ queue_item.attorney_notes }}{% endif %}
-  — cleared to send the redline to the counterparty.
+
+{# ── market lens — scannable panel, prose and statistics behind an expander ── #}
+{% if market %}
+{% set is_attorney = user and user.role == 'attorney' %}
+{% set synth = market.get('synthesis') %}
+{% set flagged = market.off_market.flagged %}
+{% set adverse = (market.assessments or []) | selectattr('favorability','equalto','unfavorable') | rejectattr('covered_by_playbook') | list %}
+<div class="card mb-4 px-4 py-3">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <span class="fw-semibold"><i class="bi bi-graph-up me-1"></i>Market Lens</span>
+    <small class="text-muted">
+      vs {{ market.segment.n }} {{ 'mutual' if market.segment.mutual else 'unilateral' if market.segment.mutual is false else 'comparable' }} NDAs
+    </small>
+  </div>
+
+  {% if synth and synth.headline %}
+  <p class="fw-semibold mb-2">{{ synth.headline }}</p>
+  {% endif %}
+
+  {% for r in view.market_rows %}
+  <div class="market-row">
+    <span class="mkt-label">{{ r.label }}</span>
+    <span>{{ r.text }}
+      {% if r.uncommon %}
+      <span class="mkt-rare" title="About {{ r.share }}% of {{ market.segment.n }} similar NDAs use this wording. Rarity alone doesn't require changes.">◆ Uncommon in market</span>
+      {% endif %}
+    </span>
+  </div>
+  {% endfor %}
+
+  {% if adverse %}
+  <div class="border-start border-3 border-warning ps-3 py-1 my-2 small">
+    <strong>{{ adverse | length }} uncommon term{{ 's' if adverse | length != 1 }}</strong>
+    judged against your position and missed by the playbook — routed to attorney review.
+    {% for a in adverse %}<div class="text-muted">{{ a.label }}{% if a.rationale %} — {{ a.rationale }}{% endif %}</div>{% endfor %}
+  </div>
+  {% endif %}
+
+  <details class="mt-2">
+    <summary class="text-primary" style="cursor:pointer;">Full market comparison ▾</summary>
+    <div class="mt-3">
+      {% if synth and synth.client_summary %}<p>{{ synth.client_summary }}</p>{% endif %}
+
+      {% if is_attorney and synth and synth.lawyer_notes %}
+      <div class="border rounded px-3 py-2 mb-3 bg-light">
+        <small class="text-muted fw-semibold d-block mb-1"><i class="bi bi-briefcase me-1"></i>ATTORNEY NOTES</small>
+        <ul class="small mb-0">
+          {% for n in synth.lawyer_notes %}<li>{{ n }}</li>{% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {% if is_attorney or not synth %}
+      {# ── raw statistics — attorneys, and legacy reports without a synthesis ── #}
+      {% if market.off_market.index is not none and market.off_market.status == 'scored' %}
+      <p class="small text-muted mb-2">
+        <i class="bi bi-speedometer2 me-1"></i>
+        Off-Market Index <strong>{{ market.off_market.index }}</strong> — this NDA's clause combinations are rarer overall than ~{{ market.off_market.index | round | int }}% of comparable NDAs.
+      </p>
+      {% endif %}
+      {% if market.off_market.status != 'scored' %}
+      <p class="text-muted small mb-3"><i class="bi bi-info-circle me-1"></i>
+        Not enough comparable NDAs in this segment to score clause combinations reliably.
+      </p>
+      {% elif flagged %}
+        {% if market.assessments %}
+        <div class="border rounded px-3 py-2 mb-3 small">
+          <strong>{{ flagged | length }} uncommon clause combination{{ 's' if flagged | length != 1 }}</strong>
+          {% if adverse %}
+          — <strong>{{ adverse | length }}</strong> judged against our position and missed by the playbook → routed to attorney review
+          {% else %}
+          — none judged against our position
+          {% endif %}
+          <ul class="mb-0 mt-2 list-unstyled">
+            {% for a in market.assessments %}
+            <li class="mb-2">
+              <span class="badge bg-{{ 'danger' if a.favorability == 'unfavorable' else 'success' if a.favorability == 'favorable' else 'secondary' if a.favorability == 'neutral' else 'light text-dark border' }}">
+                {{ {'unfavorable': 'against us', 'favorable': 'in our favor', 'neutral': 'neutral', 'unclear': 'unclear'}[a.favorability] }}
+              </span>
+              {% if a.covered_by_playbook %}<span class="badge bg-dark">already in playbook findings</span>{% endif %}
+              {{ a.label }}
+              {% if a.get('pvalue') is not none %}<span class="text-muted">· observed {{ a.observed }} of {{ a.n }} · ~{{ a.expected }} expected if independent · p={{ '%.2g' | format(a.pvalue) }}</span>{% endif %}
+              {% if a.rationale %}<div class="text-muted">{{ a.rationale }}</div>{% endif %}
+              {% if a.fields and market.evidence %}
+                {% for fid in a.fields if market.evidence.get(fid) %}
+                <div class="text-muted fst-italic ps-2 border-start border-2">
+                  <i class="bi bi-file-earmark-text"></i>
+                  Document evidence ({{ fid.replace('_',' ') }}): “{{ market.evidence[fid] }}”
+                </div>
+                {% endfor %}
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% else %}
+        <div class="border rounded px-3 py-2 mb-3 small">
+          <strong>{{ flagged | length }} uncommon clause combination{{ 's' if flagged | length != 1 }}</strong>
+          — rare among comparable NDAs:
+          <ul class="mb-0 mt-1">
+            {% for c in flagged[:5] %}
+            <li>{{ c.label }} — only <strong>{{ c.count }} of {{ c.n }}</strong> comparable NDAs ({{ c.share }}%)
+              {% if c.get('pvalue') is not none %}<span class="text-muted">· ~{{ c.expected }} expected if independent · p={{ '%.2g' | format(c.pvalue) }}</span>{% endif %}
+              {% if c.fields and market.evidence %}
+                {% for fid in c.fields if market.evidence.get(fid) %}
+                <div class="text-muted fst-italic ps-2 border-start border-2">
+                  <i class="bi bi-file-earmark-text"></i>
+                  Document evidence ({{ fid.replace('_',' ') }}): “{{ market.evidence[fid] }}”
+                </div>
+                {% endfor %}
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+      {% else %}
+      <p class="text-success small mb-3"><i class="bi bi-check-circle me-1"></i>
+        No uncommon clause combinations — this NDA's terms look on-market.
+      </p>
+      {% endif %}
+
+      <div class="row row-cols-1 row-cols-md-2 g-2 mb-2">
+        {% for f in market.fields if f.determined %}
+        <div class="col">
+          <div class="d-flex justify-content-between small border rounded px-2 py-1 {{ 'border-warning' if f.get('signals_disagree') }}">
+            <span class="text-muted">{{ f.label | title }}</span>
+            <span class="text-end">
+              <strong>{{ f.value }}</strong>
+              {% if f.note %}<span class="text-muted"> · {{ f.note }}</span>{% endif %}
+              {% if f.get('tabpfn_p_obs') is not none %}<span class="text-muted"> · model p={{ '%.2f' | format(f.tabpfn_p_obs) }}</span>{% endif %}
+              {% if f.get('signals_disagree') %}<span class="badge bg-warning text-dark ms-1" title="The frequency count and the learned model disagree on how unusual this value is">signals disagree — worth a second look</span>{% endif %}
+            </span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% set undetermined = market.fields | rejectattr('determined') | list %}
+      {% if undetermined %}
+      <small class="text-muted d-block mb-1">
+        {{ undetermined | length }} field{{ 's' if undetermined | length != 1 }} couldn't be determined from the text.
+      </small>
+      {% endif %}
+      {% endif %}
+
+      <small class="text-muted fst-italic d-block mt-2">
+        Statistical context from {{ market.segment.table_n }} public NDAs (ContractNLI, CUAD &amp; the Material Contracts Corpus — see data attribution) — not legal advice.
+        Rarity alone never triggers review; a combination routes to an attorney only when judged unfavorable to our position and missed by the playbook.
+      </small>
+    </div>
+  </details>
 </div>
-{% elif queue_item and queue_item.status == 'rejected' %}
-<div class="alert alert-danger py-2 mb-3">
-  <i class="bi bi-x-circle me-1"></i><strong>Rejected by attorney</strong>
-  {%- if queue_item.reviewed_by %} ({{ queue_item.reviewed_by }}{% if queue_item.reviewed_at %}, {{ queue_item.reviewed_at[:10] }}{% endif %}){% endif %}
-  {%- if queue_item.attorney_notes %} — {{ queue_item.attorney_notes }}{% endif %}
-  <div class="small mt-1"><strong>Next step:</strong> address the attorney's notes with the counterparty, then
-    <a href="/upload?case={{ doc.case_id }}" class="alert-link">upload the revised version →</a>
-    Syntra will re-run the full analysis and retire this review.</div>
+{% endif %}
+
+{# ── clause-by-clause — filterable, grouped by severity ── #}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
+  <h6 class="text-muted fw-semibold mb-0">CLAUSE-BY-CLAUSE ({{ view.total }} clauses)</h6>
+  <div class="filter-seg" role="group" aria-label="Filter clauses">
+    <button type="button" data-filter="all" class="active">All · {{ view.total }}</button>
+    {% for g in view.groups if g.count %}
+    <button type="button" data-filter="{{ g.key }}">{{ g.label }} · {{ g.count }}</button>
+    {% endfor %}
+  </div>
 </div>
-{% elif doc.status == 'processed' %}
-<div class="alert alert-success py-2 mb-3">
-  <i class="bi bi-check2-circle me-1"></i><strong>Good to go</strong> — no findings met the escalation threshold; attorney review not required.
+
+{% for g in view.groups if g.count %}
+<div class="clause-group" data-group="{{ g.key }}">
+  <div class="group-head">{{ g.label }} · {{ g.count }}</div>
+  {% if not loop.first %}
+  <button type="button" class="group-toggle" data-target="group-{{ g.key }}">
+    Show {{ g.count }} {{ g.plural if g.count != 1 else g.label | lower }} ▾
+  </button>
+  {% endif %}
+  <div class="group-body {{ 'd-none' if not loop.first }}" id="group-{{ g.key }}">
+    {% for c in g.cards %}
+    <details class="clause-card {{ c.accent }}" data-cat="{{ c.cat }}" id="clause-{{ c.clause_id }}" {{ 'open' if c.open }}>
+      <summary>
+        <div class="d-flex justify-content-between align-items-center gap-2">
+          <span class="clause-title">{{ c.title }}</span>
+          <span class="cat-badge {{ c.badge }}">{{ c.cat_label }}</span>
+        </div>
+        <div class="takeaway">{{ c.takeaway }}</div>
+      </summary>
+      <div class="clause-body">
+        {% if c.clause_text %}
+        <div class="excerpt">{{ c.clause_text[:600] }}{% if c.clause_text | length > 600 %}…{% endif %}</div>
+        {% endif %}
+        {% if c.rationale %}<p class="analysis">{{ c.rationale }}</p>{% endif %}
+        {% if c.reason %}<p class="analysis text-muted">{{ c.reason }}</p>{% endif %}
+        {% if c.suggested_text %}
+        <div class="fix-inset">
+          <span class="inset-label">Suggested replacement</span>
+          <span class="small">{{ c.suggested_text }}</span>
+        </div>
+        {% endif %}
+        {{ cite.source_line(c) }}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
 </div>
+{% endfor %}
+
+{# ── document preamble — filing header text, never an analyzed clause ── #}
+{% if view.preamble %}
+<details class="preamble-row">
+  <summary>Document header — not analyzed</summary>
+  {% for p in view.preamble %}
+  <div class="excerpt mt-2">{{ p.clause_text[:400] }}{% if p.clause_text | length > 400 %}…{% endif %}</div>
+  {% endfor %}
+</details>
 {% endif %}
 
 {# ── version history ── #}
 {% if versions and versions|length > 1 %}
-<div class="card mb-4">
+<div class="card mt-4 mb-4">
   <div class="card-header fw-semibold">
     <i class="bi bi-clock-history me-1"></i>Version History
     <span class="text-muted fw-normal small ms-1">— changes are analysis comparisons, not text diffs</span>
@@ -126,277 +458,7 @@
 </div>
 {% endif %}
 
-{# ── risk summary ── #}
-{% set issues     = verdicts | selectattr('branch','equalto','verdict') | selectattr('status','ne','complies') | list %}
-{% set silences   = verdicts | selectattr('branch','equalto','silence') | list %}
-{% set abstains   = verdicts | selectattr('branch','equalto','abstain') | list %}
-{% set unaccept   = verdicts | selectattr('status','equalto','unacceptable') | list %}
-{% set deviations = verdicts | selectattr('status','equalto','acceptable_deviation') | list %}
-
-<div class="card mb-4">
-  <div class="card-header bg-dark text-white fw-semibold">
-    <i class="bi bi-shield-exclamation me-1"></i>Plain-Language Risk Summary
-  </div>
-  <div class="card-body">
-    {% if not issues and not silences and not abstains %}
-    <p class="text-success mb-0">
-      <i class="bi bi-check-circle-fill me-1"></i>
-      No material issues found — contract appears to comply with playbook positions.
-    </p>
-    {% elif not issues and not silences %}
-    <p class="mb-0">
-      <i class="bi bi-question-circle-fill me-1 text-warning"></i>
-      No breaches found in the clauses that could be assessed, but
-      <strong>{{ abstains | length }} clause{{ 's' if abstains | length != 1 }}</strong>
-      had no matching playbook position and couldn't be evaluated.
-    </p>
-    {% else %}
-      {% if silences %}
-      <div class="alert alert-danger py-2 mb-3">
-        <strong><i class="bi bi-x-octagon me-1"></i>Missing required clauses:</strong>
-        {{ silences | map(attribute='reason') | join('; ') }}
-      </div>
-      {% endif %}
-      {% if unaccept %}
-      <p class="mb-2">
-        <span class="badge bg-danger me-1">{{ unaccept | length }} unacceptable</span>
-        Clauses that breach walk-away positions — must be renegotiated.
-      </p>
-      {% endif %}
-      {% if deviations %}
-      <p class="mb-2">
-        <span class="badge bg-warning text-dark me-1">{{ deviations | length }} acceptable deviations</span>
-        Within fallback range — flag for awareness.
-      </p>
-      {% endif %}
-      {% for v in (issues + silences)[:6] %}
-      <div class="d-flex align-items-start gap-2 mb-2 ps-2 border-start border-3 border-{{ 'danger' if v.status == 'unacceptable' or v.branch == 'silence' else 'warning' }}">
-        <div>
-          {% if v.clause_id %}
-          <a href="#clause-{{ v.clause_id }}" class="fw-semibold small text-decoration-none">
-            {{ (v.clause_type or v.branch or '').replace('_',' ') | title }} ↓
-          </a>
-          {% else %}
-          <span class="fw-semibold small">{{ (v.clause_type or v.branch or '').replace('_',' ') | title }}</span>
-          {% endif %}
-          {% if v.rationale %}<span class="text-muted small"> — {{ v.rationale }}</span>{% endif %}
-          {% if v.reason %}<span class="text-muted small"> — {{ v.reason }}</span>{% endif %}
-          {% if v.cited_position %}
-          <a href="/playbook#pos-{{ v.cited_position.service_line }}-{{ v.cited_position.policy_id }}"
-             class="small text-decoration-none text-nowrap"
-             title="Open the cited playbook position">
-            <i class="bi bi-journal-bookmark"></i> {{ v.cited_position.rule_id or v.cited_position.policy_label }}
-          </a>
-          {% endif %}
-        </div>
-      </div>
-      {% endfor %}
-      {% if (issues + silences) | length > 6 %}
-      <small class="text-muted">… and {{ (issues + silences) | length - 6 }} more issues below.</small>
-      {% endif %}
-    {% endif %}
-  </div>
-</div>
-
-{# ── stats strip ── #}
-<div class="d-flex gap-2 mb-3 flex-wrap">
-  <span class="badge bg-danger fs-6 px-3">{{ unaccept | length }} unacceptable</span>
-  <span class="badge bg-warning text-dark fs-6 px-3">{{ deviations | length }} deviations</span>
-  <span class="badge bg-success fs-6 px-3">{{ verdicts | selectattr('status','equalto','complies') | list | length }} comply</span>
-  <span class="badge bg-secondary fs-6 px-3">{{ silences | length }} silent</span>
-  <span class="badge bg-light text-dark fs-6 px-3">{{ abstains | length }} abstained</span>
-</div>
-
-{# ── market lens (advisory statistical context) ── #}
-{% if market %}
-{% set is_attorney = user and user.role == 'attorney' %}
-{% set synth = market.get('synthesis') %}
-<div class="card mb-4">
-  <div class="card-header bg-dark text-white fw-semibold d-flex justify-content-between align-items-center">
-    <span><i class="bi bi-graph-up me-1"></i>Market Lens — how this NDA compares to the market</span>
-    <small class="fw-normal opacity-75">
-      vs {{ market.segment.n }} {{ 'mutual' if market.segment.mutual else 'unilateral' if market.segment.mutual is false else 'comparable' }} NDAs
-    </small>
-  </div>
-  <div class="card-body">
-    {% set flagged = market.off_market.flagged %}
-
-    {# ── synthesized market position report (both roles) ── #}
-    {% if synth %}
-      {% if synth.headline %}<p class="fw-semibold mb-2">{{ synth.headline }}</p>{% endif %}
-      {% if synth.client_summary %}<p class="mb-3">{{ synth.client_summary }}</p>{% endif %}
-      {% if is_attorney and synth.lawyer_notes %}
-      <div class="border rounded px-3 py-2 mb-3 bg-light">
-        <small class="text-muted fw-semibold d-block mb-1"><i class="bi bi-briefcase me-1"></i>ATTORNEY NOTES</small>
-        <ul class="small mb-0">
-          {% for n in synth.lawyer_notes %}<li>{{ n }}</li>{% endfor %}
-        </ul>
-      </div>
-      {% endif %}
-    {% endif %}
-
-    {% if synth and not is_attorney %}
-    {# ── operator view: plain-language outcome only, no raw statistics ── #}
-      {% set adverse = (market.assessments or []) | selectattr('favorability','equalto','unfavorable') | rejectattr('covered_by_playbook') | list %}
-      {% if adverse %}
-      <div class="alert alert-danger py-2 mb-3">
-        <strong><i class="bi bi-exclamation-triangle me-1"></i>
-          {{ adverse | length }} unusual term{{ 's' if adverse | length != 1 }} judged against our position</strong>
-        and missed by the playbook — <strong>routed to attorney review</strong>.
-        <ul class="mb-0 mt-1 small list-unstyled">
-          {% for a in adverse %}
-          <li class="mb-1">{{ a.label }}{% if a.rationale %} <span class="text-muted">— {{ a.rationale }}</span>{% endif %}</li>
-          {% endfor %}
-        </ul>
-      </div>
-      {% elif flagged %}
-      <p class="text-muted mb-3"><i class="bi bi-info-circle me-1"></i>
-        Some term combinations here are uncommon in the market, but none were judged against our position — no attorney review needed on market grounds.
-      </p>
-      {% else %}
-      <p class="text-success mb-3"><i class="bi bi-check-circle me-1"></i>
-        This NDA's terms look on-market.
-      </p>
-      {% endif %}
-    {% else %}
-    {# ── attorney view (and legacy reports without a synthesis): full statistical detail ── #}
-    {% if market.off_market.index is not none and market.off_market.status == 'scored' %}
-    <p class="small text-muted mb-2">
-      <i class="bi bi-speedometer2 me-1"></i>
-      Off-Market Index <strong>{{ market.off_market.index }}</strong> — this NDA's clause combinations are rarer overall than ~{{ market.off_market.index | round | int }}% of comparable NDAs.
-    </p>
-    {% endif %}
-    {% if market.off_market.status != 'scored' %}
-    <p class="text-muted mb-3"><i class="bi bi-info-circle me-1"></i>
-      Not enough comparable NDAs in this segment to score clause combinations reliably.
-    </p>
-    {% elif flagged %}
-      {% if market.assessments %}
-      {% set adverse = market.assessments | selectattr('favorability','equalto','unfavorable') | rejectattr('covered_by_playbook') | list %}
-      <div class="alert alert-{{ 'danger' if adverse else 'secondary' }} py-2 mb-3">
-        <strong><i class="bi bi-exclamation-triangle me-1"></i>
-          {{ flagged | length }} unusual clause combination{{ 's' if flagged | length != 1 }}</strong>
-        {% if adverse %}
-        — <strong>{{ adverse | length }}</strong> judged against our position and missed by the playbook → <strong>routed to attorney review</strong>
-        {% else %}
-        — none judged against our position
-        {% endif %}
-        <ul class="mb-0 mt-2 small list-unstyled">
-          {% for a in market.assessments %}
-          <li class="mb-2">
-            <span class="badge bg-{{ 'danger' if a.favorability == 'unfavorable' else 'success' if a.favorability == 'favorable' else 'secondary' if a.favorability == 'neutral' else 'light text-dark border' }}">
-              {{ {'unfavorable': 'against us', 'favorable': 'in our favor', 'neutral': 'neutral', 'unclear': 'unclear'}[a.favorability] }}
-            </span>
-            {% if a.covered_by_playbook %}<span class="badge bg-dark">already in playbook findings</span>{% endif %}
-            {{ a.label }}
-            {% if a.get('pvalue') is not none %}<span class="text-muted">· observed {{ a.observed }} of {{ a.n }} · ~{{ a.expected }} expected if independent · p={{ '%.2g' | format(a.pvalue) }}</span>{% endif %}
-            {% if a.rationale %}<div class="text-muted">{{ a.rationale }}</div>{% endif %}
-            {% if a.fields and market.evidence %}
-              {% for fid in a.fields if market.evidence.get(fid) %}
-              <div class="text-muted fst-italic ps-2 border-start border-2">
-                <i class="bi bi-file-earmark-text"></i>
-                Document evidence ({{ fid.replace('_',' ') }}): “{{ market.evidence[fid] }}”
-              </div>
-              {% endfor %}
-            {% endif %}
-          </li>
-          {% endfor %}
-        </ul>
-      </div>
-      {% else %}
-      <div class="alert alert-warning py-2 mb-3">
-        <strong><i class="bi bi-exclamation-triangle me-1"></i>
-          {{ flagged | length }} unusual clause combination{{ 's' if flagged | length != 1 }}</strong>
-        — rare among comparable NDAs:
-        <ul class="mb-0 mt-1 small">
-          {% for c in flagged[:5] %}
-          <li>{{ c.label }} — only <strong>{{ c.count }} of {{ c.n }}</strong> comparable NDAs ({{ c.share }}%)
-            {% if c.get('pvalue') is not none %}<span class="text-muted">· ~{{ c.expected }} expected if independent · p={{ '%.2g' | format(c.pvalue) }}</span>{% endif %}
-            {% if c.fields and market.evidence %}
-              {% for fid in c.fields if market.evidence.get(fid) %}
-              <div class="text-muted fst-italic ps-2 border-start border-2">
-                <i class="bi bi-file-earmark-text"></i>
-                Document evidence ({{ fid.replace('_',' ') }}): “{{ market.evidence[fid] }}”
-              </div>
-              {% endfor %}
-            {% endif %}
-          </li>
-          {% endfor %}
-        </ul>
-      </div>
-      {% endif %}
-    {% else %}
-    <p class="text-success mb-3"><i class="bi bi-check-circle me-1"></i>
-      No unusual clause combinations — this NDA's terms look on-market.
-    </p>
-    {% endif %}
-
-    <div class="row row-cols-1 row-cols-md-2 g-2 mb-2">
-      {% for f in market.fields if f.determined %}
-      <div class="col">
-        <div class="d-flex justify-content-between small border rounded px-2 py-1 {{ 'border-warning' if f.get('signals_disagree') }}">
-          <span class="text-muted">{{ f.label | title }}</span>
-          <span class="text-end">
-            <strong>{{ f.value }}</strong>
-            {% if f.note %}<span class="text-muted"> · {{ f.note }}</span>{% endif %}
-            {% if f.get('tabpfn_p_obs') is not none %}<span class="text-muted"> · model p={{ '%.2f' | format(f.tabpfn_p_obs) }}</span>{% endif %}
-            {% if f.get('signals_disagree') %}<span class="badge bg-warning text-dark ms-1" title="The frequency count and the learned model disagree on how unusual this value is">signals disagree — worth a second look</span>{% endif %}
-          </span>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-    {% set undetermined = market.fields | rejectattr('determined') | list %}
-    {% if undetermined %}
-    <small class="text-muted d-block mb-1">
-      {{ undetermined | length }} field{{ 's' if undetermined | length != 1 }} couldn't be determined from the text.
-    </small>
-    {% endif %}
-    {% endif %}
-    <small class="text-muted fst-italic">
-      Statistical context from {{ market.segment.table_n }} public NDAs (ContractNLI, CUAD &amp; the Material Contracts Corpus — see data attribution) — not legal advice.
-      Rarity alone never triggers review; a combination routes to an attorney only when judged unfavorable to our position and missed by the playbook.
-    </small>
-  </div>
-</div>
-{% endif %}
-
-{# ── clause list ── #}
-<h6 class="text-muted fw-semibold mb-2">CLAUSE-BY-CLAUSE ANALYSIS ({{ verdicts | length }} clauses)</h6>
-
-{% for v in verdicts %}
-{% if v.branch != 'abstain' or loop.index <= 5 %}
-<div class="card mb-2 verdict-{{ v.status or v.branch }}" id="clause-{{ v.clause_id }}">
-  <div class="card-body py-2 px-3">
-    <div class="d-flex justify-content-between align-items-start">
-      <small class="text-muted">{{ (v.clause_type or '').replace('_',' ') | title }}</small>
-      <span class="badge bg-{{ 'danger' if v.status == 'unacceptable' else 'warning text-dark' if v.status == 'acceptable_deviation' else 'success' if v.status == 'complies' else 'secondary' }} ms-2 text-nowrap">
-        {{ (v.status or v.branch or '').replace('_',' ').upper() }}
-      </span>
-    </div>
-    <p class="mb-1 small mt-1" style="opacity:.85;">
-      {{ v.clause_text[:250] if v.clause_text else '' }}{% if v.clause_text and v.clause_text | length > 250 %}…{% endif %}
-    </p>
-    {% if v.rationale %}
-    <small class="text-muted"><i class="bi bi-quote"></i> {{ v.rationale }}</small>
-    {% endif %}
-    {% if v.reason %}
-    <small class="text-muted fst-italic">{{ v.reason }}</small>
-    {% endif %}
-    {{ cite.sources(v) }}
-    {% if v.suggested_text %}
-    <div class="mt-1 p-1 bg-light rounded border-start border-primary border-3">
-      <small class="text-primary"><i class="bi bi-pencil-square me-1"></i><strong>Suggestion:</strong> {{ v.suggested_text }}</small>
-    </div>
-    {% endif %}
-  </div>
-</div>
-{% endif %}
-{% endfor %}
-
-{% if abstains | length > 5 %}
-<p class="text-muted small mt-2"><i class="bi bi-info-circle"></i> {{ abstains | length - 5 }} additional abstained clauses hidden (low-confidence / no playbook coverage).</p>
-{% endif %}
+</div>{# /review-wrap #}
 
 {% endblock %}
 
@@ -409,6 +471,68 @@ if (new URLSearchParams(location.search).has("ack")) {
   u.searchParams.delete("ack");
   history.replaceState(null, "", u);
 }
+</script>
+<script>
+(function () {
+  // ── segmented filters + collapsed groups ──
+  const buttons = Array.from(document.querySelectorAll(".filter-seg [data-filter]"));
+  const groups = Array.from(document.querySelectorAll(".clause-group"));
+
+  function applyFilter(cat) {
+    buttons.forEach(b => b.classList.toggle("active", b.dataset.filter === cat));
+    groups.forEach(g => {
+      const body = g.querySelector(".group-body");
+      const toggle = g.querySelector(".group-toggle");
+      const match = cat === "all" || g.dataset.group === cat;
+      g.classList.toggle("d-none", !match);
+      if (cat !== "all") {
+        body.classList.remove("d-none");
+        if (toggle) toggle.classList.add("d-none");
+      } else if (toggle && !toggle.dataset.expanded) {
+        body.classList.add("d-none");
+        toggle.classList.remove("d-none");
+      }
+    });
+  }
+  buttons.forEach(b => b.addEventListener("click", () => applyFilter(b.dataset.filter)));
+
+  document.querySelectorAll(".group-toggle").forEach(t => {
+    t.addEventListener("click", () => {
+      document.getElementById(t.dataset.target).classList.remove("d-none");
+      t.dataset.expanded = "1";
+      t.classList.add("d-none");
+    });
+  });
+
+  // ── citation anchors: reveal + expand the target card wherever it hides ──
+  function reveal() {
+    const id = location.hash.slice(1);
+    if (!id) return;
+    const el = document.getElementById(id);
+    if (!el || !el.classList.contains("clause-card")) return;
+    applyFilter("all");
+    const g = el.closest(".clause-group");
+    if (g) {
+      const body = g.querySelector(".group-body");
+      const toggle = g.querySelector(".group-toggle");
+      body.classList.remove("d-none");
+      if (toggle) { toggle.dataset.expanded = "1"; toggle.classList.add("d-none"); }
+    }
+    el.open = true;
+    el.scrollIntoView({ block: "start" });
+  }
+  window.addEventListener("hashchange", reveal);
+  reveal();
+
+  // ── sticky slim header once the decision card scrolls out of view ──
+  const hero = document.getElementById("decision-card");
+  const bar = document.getElementById("sticky-bar");
+  if (hero && bar && "IntersectionObserver" in window) {
+    new IntersectionObserver(entries => {
+      bar.classList.toggle("d-none", entries[0].isIntersecting);
+    }).observe(hero);
+  }
+})();
 </script>
 {% if queue_item and queue_item.status == 'pending' %}
 <script>

@@ -1,0 +1,97 @@
+# Contract Review View — Redesign Spec (for Replit Agent)
+
+Goal: turn the review tab from an audit log into a decision surface for a non-lawyer SMB user. The user must see (a) the verdict, (b) the one thing blocking signature, and (c) the fix + next action — all without scrolling. Everything else is progressive disclosure. Do not change the analysis pipeline or data model; this is presentation-layer only.
+
+---
+
+## P0 — Information architecture (do these first)
+
+### 1. Replace the escalation banner + Risk Summary with a single Decision Card (hero)
+Build one card at the top containing, in order:
+- **Verdict headline** (h1-weight): `Changes required before signing` (derive from status: any unacceptable → this; only deviations → `OK to sign with minor compromises`; all comply → `Ready to sign`).
+- **The blocker, one sentence, plain English:** `Clause 9 locks you in for 2 years with no way to exit early — this breaks your walk-away rule.` Generate from the unacceptable clause's analysis, ≤25 words, no playbook IDs in the sentence (put `TT-GEN-SUP-1` as a small secondary link).
+- **Recommended fix** in a highlighted inset: the existing suggestion text (1-year initial term, auto-renew, 30-day notice, survival of confidentiality).
+- **Primary actions row:** `[Apply fix & preview redline]` (primary button, brand color) · `[Send to attorney]` (secondary) · `[Download .docx]` (tertiary/text).
+- **Status pill** inside the card, not a separate banner: `Attorney sign-off required` with the `View queue →` link.
+- **One-line secondary summary:** `4 clauses are acceptable compromises · 6 clauses need info we couldn't verify from this document · everything else is standard.`
+
+### 2. Delete the bulleted Risk Summary list entirely
+It duplicates the clause cards verbatim. Its content lives in the clause list (item 4). The six "cannot confirm compliance from this clause alone" bullets must NOT appear as individual issues anywhere in the summary — they collapse into the single "6 clauses need info we couldn't verify" line in the hero.
+
+### 3. Convert the verdict-count chip row into working filters
+The `1 unacceptable / 4 deviations / 0 comply / 0 silent / 3 abstained` row currently reads as buttons but does nothing. Make it a segmented filter control directly above the clause list that filters cards on click, with an `All` default. Hide zero-count segments. Relabel per the glossary in P1-6.
+
+### 4. Reorder and group the clause list by severity
+Order: **Needs change** (unacceptable) → **Acceptable compromise** (deviations) → **Couldn't assess** → everything else. Each group gets a small section header with count. Groups after the first render collapsed by default with an expand affordance (`Show 4 acceptable compromises ▾`). The unacceptable clause is therefore the FIRST card the user sees in the list, expanded.
+
+### 5. Collapse clause cards by default
+Collapsed card = clause title (rename from raw type: `Term & Termination — Clause 9`) + verdict badge + the one-line plain-English takeaway. Expanded card = contract excerpt, full analysis, suggestion (if any), sources. The single unacceptable card starts expanded; all others collapsed.
+
+### 6. Handle the document preamble
+The first "clause" card is SEC filing header text (`EX-99.3 4 f8k082516ex99iii...`), not a clause. Either exclude preamble chunks from the visible list, or render one muted row at the bottom: `Document header — not analyzed`. Never show it as a Confidentiality clause with an UNUSUAL badge.
+
+---
+
+## P1 — Reduce cognitive load
+
+### 7. Separate the two taxonomies visually
+- **Playbook verdict** = the colored badge (the only colored badge on a card): red `Needs change`, amber `Acceptable compromise`, green `Standard`, gray `Couldn't assess`.
+- **Market rarity** = never a badge. Render as a muted inline tag with an icon in the card's metadata row: `◆ Uncommon in market` with a tooltip: `Fewer than X% of 628 similar NDAs use this wording. Rarity alone doesn't require changes.`
+
+### 8. Plain-language glossary — apply everywhere (badges, filters, counters)
+- `unacceptable` → `Needs change`
+- `acceptable deviation` → `Acceptable compromise`
+- `comply` → `Standard`
+- `silent` → `Not covered`
+- `abstained` → `Couldn't assess`
+- `UNUSUAL` → `Uncommon in market`
+Keep internal enum values unchanged; map at render time.
+
+### 9. Restructure Market Lens into a scannable panel
+Replace the paragraph blob with a compact card: headline sentence (keep the existing bold one-liner), then 4–5 labeled key-value rows, e.g.:
+- `Confidentiality duration — Indefinite. Common, and more protective for you.`
+- `What's protected — Only marked information. Narrower than most; label sensitive docs.`
+- `Non-solicit / non-compete — None. Keeps the NDA focused.`
+- `Dispute resolution — Injunctive relief allowed; forum unspecified.`
+Each row: label (utility caps, muted) + one plain sentence. Put the full prose paragraph and the statistical disclaimer behind a `Full market comparison ▾` expander. Keep `vs 628 mutual NDAs` in the panel header.
+
+### 10. De-noise source chips
+Replace the repeated blue `CONF-NDA-1 · Confidentiality` pills with a single muted text link per card: `Source: CONF-NDA-1 · view counterparty text`. One line, no pills.
+
+---
+
+## P2 — Visual design
+
+### 11. Layout
+- Content max-width **920px**, centered. Current full-width lines exceed 150 characters — unreadable.
+- Sticky slim header on scroll: filename + verdict badge + `Apply fix & preview redline` button.
+
+### 12. Color semantics
+- Primary buttons = brand color. **`Preview Redline` must not be red** — red is reserved exclusively for `Needs change` states.
+- Max one alert-colored surface above the fold (the Decision Card's blocker line). Remove the yellow banner (absorbed into hero per P0-1).
+- Card left-border accents: keep, but only for `Needs change` (red) and `Acceptable compromise` (amber); no accent for neutral cards.
+
+### 13. Typography & spacing
+- Body 15px / line-height 1.6; card takeaway line 15px medium; excerpt text 13px muted; badges 11px caps with 0.04em tracking.
+- Increase card padding to 20–24px; 12px gap between cards; drop the `❝` quote glyphs before analysis text — plain text, no decoration.
+
+---
+
+## P3 — Microcopy rules (apply across all generated one-liners)
+
+- Every card takeaway answers "so what + what should I do" in ≤20 words, second person where natural: `3-year confidentiality term — within your fallback range. No action needed.`
+- Never lead with playbook IDs; they appear only in the Source line.
+- Buttons name the outcome: `Apply fix & preview redline`, not `Preview Redline`.
+
+---
+
+## Acceptance criteria
+
+1. Above the fold (1440×900): verdict, the blocker sentence, the fix, and the primary CTA — zero scrolling.
+2. No text appears twice on the page (summary vs. clause cards).
+3. The unacceptable clause is the first item in the clause list, expanded.
+4. Filter chips actually filter; zero-count states hidden.
+5. No red UI element except `Needs change` states.
+6. No instance of "abstained," "silent," "deviation," or "unacceptable" visible to the user.
+7. Market rarity never shares the verdict badge slot.
+8. SEC preamble no longer rendered as an analyzed clause.

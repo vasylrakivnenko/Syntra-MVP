@@ -1,5 +1,6 @@
 """Syntra — AI-native general counsel. Flask entry point."""
 import os
+import re
 import sys
 import json
 import datetime
@@ -130,6 +131,247 @@ def _enrich_citations(verdicts):
             "as_of": "current",
         }
     return verdicts
+
+
+# ── contract review view builder — presentation layer ONLY ───────────────────
+# Internal enums (unacceptable / acceptable_deviation / complies / unusual /
+# silence / abstain) never change; they are mapped to plain-language display
+# categories at render time. No pipeline or data-model impact.
+
+_RULE_ID_RE = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b")
+_PREAMBLE_RE = re.compile(r"^\s*EX-\d|\.htm\b|^\s*UNITED STATES\s+SECURITIES", re.I)
+_CLAUSE_NO_RE = re.compile(r"^\s*(\d{1,2})[.)]\s")
+
+_CLAUSE_TITLES = {
+    "term_and_termination": "Term & Termination",
+    "limitation_of_liability": "Limitation of Liability",
+    "ip_ownership": "IP Ownership",
+    "other": "General Provision",
+}
+
+# display category -> (label, badge class, left-border accent class, plural noun)
+_CATEGORIES = {
+    "needs_change":   ("Needs change", "cat-badge-danger", "accent-danger",
+                       "clauses that need changes"),
+    "compromise":     ("Acceptable compromise", "cat-badge-warning", "accent-warning",
+                       "acceptable compromises"),
+    "couldnt_assess": ("Couldn't assess", "cat-badge-muted", "",
+                       "clauses we couldn't assess"),
+    "standard":       ("Standard", "cat-badge-success", "",
+                       "standard clauses"),
+    "not_covered":    ("Not covered", "cat-badge-muted", "",
+                       "clauses your playbook doesn't cover"),
+}
+_GROUP_ORDER = ["needs_change", "compromise", "couldnt_assess", "standard", "not_covered"]
+
+
+def _display_category(v):
+    if v.get("branch") == "silence":
+        return "not_covered"
+    if v.get("branch") == "abstain":
+        return "couldnt_assess"
+    return {
+        "unacceptable": "needs_change",
+        "acceptable_deviation": "compromise",
+        "complies": "standard",
+    }.get(v.get("status"), "couldnt_assess")  # 'unusual' = couldn't confirm
+
+
+def _plain_sentence(text, max_words=20):
+    """First sentence, playbook IDs stripped, word-capped — P3 microcopy rules."""
+    if not text:
+        return ""
+    t = _RULE_ID_RE.sub("", text)
+    t = re.sub(r"\(\s*\)", "", t)            # parens emptied by ID removal
+    t = re.sub(r"\s+", " ", t).strip(" \t-–—,;:")
+    t = re.split(r"(?<=[.!?])\s", t, maxsplit=1)[0].strip()
+    words = t.split()
+    if len(words) > max_words:
+        t = " ".join(words[:max_words]).rstrip(",;:") + "…"
+    t = re.sub(r"\s+([,.;:!?])", r"\1", t)
+    if t and t[-1] not in ".…!?":
+        t += "."
+    return t
+
+
+def _takeaway(v, cat):
+    """One-line collapsed-card summary: 'so what' in <=20 words, no rule IDs."""
+    if v.get("branch") == "abstain":
+        reason = v.get("reason") or ""
+        if reason.startswith("Clause classified"):
+            return "Your playbook has no position for this type of clause — not assessed."
+        if reason.startswith("Insufficient grounding"):
+            return "Not enough information in this clause alone to check it against your playbook."
+        if reason.startswith("LLM"):
+            return "Automated analysis wasn't available for this clause."
+        return _plain_sentence(reason) or "Couldn't assess this clause."
+    if v.get("branch") == "silence":
+        return _plain_sentence(v.get("reason")) or \
+            "Your playbook doesn't cover this clause yet — no position to compare against."
+    base = _plain_sentence(v.get("rationale"))
+    if cat == "standard":
+        return (base + " No action needed.").strip() if base else \
+            "Matches your playbook position. No action needed."
+    if cat == "couldnt_assess":
+        return base or "Couldn't confirm compliance from this clause alone."
+    return base or "Review this clause."
+
+
+def _clause_title(v):
+    base = _CLAUSE_TITLES.get(v.get("clause_type")) or \
+        (v.get("clause_type") or "Clause").replace("_", " ").title()
+    m = _CLAUSE_NO_RE.match(v.get("clause_text") or "")
+    return f"{base} — Clause {m.group(1)}" if m else base
+
+
+def _market_share(field):
+    if not field or not field.get("note"):
+        return None
+    m = re.search(r"(\d+)%", field["note"])
+    return int(m.group(1)) if m else None
+
+
+def _market_rows(market):
+    """4-5 scannable label + plain-sentence rows for the Market Lens panel."""
+    fields = {f.get("id"): f for f in (market.get("fields") or []) if f.get("determined")}
+    rows = []
+
+    def add(label, text, share_field=None):
+        share = _market_share(fields.get(share_field)) if share_field else None
+        rows.append({"label": label, "text": text, "share": share,
+                     "uncommon": share is not None and share < 25})
+
+    f = fields.get("ci_definition_breadth")
+    if f:
+        text = {
+            "marked only": "Only marked information counts — label sensitive documents before sharing.",
+            "defined categories": "Defined categories of information are protected.",
+            "broad": "Broadly defined — most information you share is protected.",
+        }.get(f["value"], str(f["value"]).capitalize() + ".")
+        add("What's protected", text, "ci_definition_breadth")
+
+    f = fields.get("confidentiality_survival_months")
+    if f:
+        text = "Indefinite — the duty to keep secrets never expires." \
+            if f["value"] == "perpetual" else \
+            f"Obligations last {f['value']} after the agreement ends."
+        add("Confidentiality duration", text, "confidentiality_survival_months")
+
+    f = fields.get("term_months")
+    if f:
+        text = "No fixed term." if f["value"] in ("perpetual", "unspecified") \
+            else f"The agreement runs for {f['value']}."
+        add("Agreement term", text, "term_months")
+
+    ns, nc = fields.get("non_solicit"), fields.get("non_compete")
+    if ns or nc:
+        extras = [name for name, x in (("non-solicit", ns), ("non-compete", nc))
+                  if x and x.get("value") == "yes"]
+        text = "Includes " + " and ".join(extras) + " restrictions — broader than a pure NDA." \
+            if extras else "None — keeps the NDA focused on confidentiality."
+        add("Non-solicit / non-compete", text)
+
+    dr, inj = fields.get("dispute_resolution"), fields.get("injunctive_relief")
+    if dr or inj:
+        parts = []
+        if inj:
+            parts.append("Court injunctions allowed to stop misuse"
+                         if inj["value"] == "yes" else "No injunctive-relief clause")
+        if dr:
+            parts.append("forum unspecified" if dr["value"] == "unspecified"
+                         else f"disputes via {dr['value']}")
+        add("Dispute resolution", "; ".join(parts) + ".", "dispute_resolution")
+
+    return rows[:5]
+
+
+def _contract_view(verdicts, market, escalated=False):
+    """Everything the redesigned /contracts/<id> template needs, derived
+    at render time from existing verdict rows and the stored market report.
+    `escalated` = a pending attorney queue item exists; keeps the headline
+    tone in lockstep with the routing pill and the dashboard risk chip."""
+    cards, preamble = [], []
+    first_start = min((v.get("clause_start") or 0 for v in verdicts), default=0)
+    for v in verdicts:
+        text_head = (v.get("clause_text") or "")[:150]
+        if (v.get("clause_start") or 0) == first_start and verdicts and \
+                _PREAMBLE_RE.search(text_head):
+            preamble.append(v)
+            continue
+        cat = _display_category(v)
+        label, badge, accent, _plural = _CATEGORIES[cat]
+        cards.append({**v, "cat": cat, "cat_label": label, "badge": badge,
+                      "accent": accent, "title": _clause_title(v),
+                      "takeaway": _takeaway(v, cat), "open": False})
+
+    counts = Counter(c["cat"] for c in cards)
+
+    groups = []
+    for key in _GROUP_ORDER:
+        members = [c for c in cards if c["cat"] == key]
+        if key == "needs_change":
+            members.sort(key=lambda c: -(c.get("risk_weight") or 0))
+        else:
+            members.sort(key=lambda c: c.get("clause_start") or 0)
+        label, _badge, _accent, plural = _CATEGORIES[key]
+        groups.append({"key": key, "label": label, "plural": plural,
+                       "count": len(members), "cards": members})
+
+    blocker = fix = None
+    if counts["needs_change"]:
+        top = next(g for g in groups if g["key"] == "needs_change")["cards"][0]
+        top["open"] = True
+        cp = top.get("cited_position") or {}
+        blocker = {
+            "sentence": _plain_sentence(top.get("rationale") or top.get("reason"), 25)
+                        or top["takeaway"],
+            "rule_id": cp.get("rule_id") or (top.get("rule_ids") or [None])[0],
+            "rule_href": (f"/playbook#pos-{cp['service_line']}-{cp['policy_id']}"
+                          if cp.get("service_line") and cp.get("policy_id") else None),
+            "clause_id": top.get("clause_id"),
+        }
+        fix_card = top if top.get("suggested_text") else next(
+            (c for g in groups if g["key"] == "needs_change"
+             for c in g["cards"] if c.get("suggested_text")), None)
+        if fix_card:
+            fix = {"text": fix_card["suggested_text"], "clause_id": fix_card["clause_id"]}
+
+    if counts["needs_change"]:
+        headline, tone = "Changes required before signing", "danger"
+    elif counts["compromise"]:
+        headline, tone = "OK to sign with minor compromises", "warning"
+    elif counts["couldnt_assess"] or counts["not_covered"]:
+        headline, tone = "No blockers found — some clauses couldn't be fully checked", "muted"
+    elif cards:
+        headline, tone = "Ready to sign", "success"
+    elif preamble:
+        headline, tone = "Only header text found — nothing to analyze", "muted"
+    else:
+        headline, tone = "No analysis available yet", "muted"
+    if escalated and tone in ("success", "muted"):
+        # never show a green/neutral verdict next to an attorney-escalation pill
+        tone = "warning"
+
+    parts = []
+    if counts["compromise"]:
+        n = counts["compromise"]
+        parts.append(f"{n} clause{'s are' if n != 1 else ' is an'} acceptable compromise{'s' if n != 1 else ''}")
+    if counts["couldnt_assess"]:
+        n = counts["couldnt_assess"]
+        parts.append(f"{n} clause{'s' if n != 1 else ''} need{'' if n != 1 else 's'} info we couldn't verify from this document")
+    if counts["not_covered"]:
+        n = counts["not_covered"]
+        parts.append(f"{n} clause{'s aren' if n != 1 else ' isn'}'t covered by your playbook yet")
+    if counts["standard"]:
+        parts.append("everything else is standard")
+    summary_line = " · ".join(parts)
+
+    return {
+        "headline": headline, "tone": tone, "blocker": blocker, "fix": fix,
+        "summary_line": summary_line, "counts": counts, "groups": groups,
+        "preamble": preamble, "total": len(cards),
+        "market_rows": _market_rows(market) if market else [],
+    }
 
 
 # ── pipeline runner ───────────────────────────────────────────────────────────
@@ -922,7 +1164,8 @@ def contract(doc_id):
                 (datetime.datetime.utcnow().isoformat(), doc_id),
             ).rowcount
         rows = db.execute(
-            """SELECT v.*, c.text AS clause_text, cl.clause_type, cl.confidence
+            """SELECT v.*, c.text AS clause_text, c.start AS clause_start,
+                      cl.clause_type, cl.confidence
                FROM verdicts v
                JOIN clauses c ON v.clause_id=c.clause_id
                JOIN classifications cl ON v.clause_id=cl.clause_id
@@ -970,8 +1213,10 @@ def contract(doc_id):
     redline_available = (UPLOADS / f"{doc_id}_redline.docx").exists()
     latest = versions[-1] if versions else None
     is_latest = (latest is None) or (latest["doc_id"] == doc["doc_id"])
+    view = _contract_view(verdicts, market,
+                          escalated=bool(queue_item and queue_item["status"] == "pending"))
     return render_template("contract.html", doc=doc, verdicts=verdicts, queue_item=queue_item,
-                           market=market, our_party=our_party,
+                           market=market, our_party=our_party, view=view,
                            redline_available=redline_available, user=current_user(),
                            versions=versions, version_changes=version_changes,
                            latest=latest, is_latest=is_latest)

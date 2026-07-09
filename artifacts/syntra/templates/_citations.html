@@ -54,3 +54,41 @@
 </div>
 {% endif %}
 {% endmacro %}
+
+{# ── de-noised single-line source citation for the contract review page.
+     One muted text link, no pills; keeps the playbook quote behind a
+     details toggle so citations stay verifiable. ── #}
+{% macro source_line(v) %}
+{% set cp = v.cited_position %}
+{% if cp %}
+<div class="source-line">
+  <details class="citation-details d-inline-block">
+    <summary class="d-inline">
+      Source:
+      <a href="/playbook#pos-{{ cp.service_line }}-{{ cp.policy_id }}"
+         title="Open this position in the playbook matrix">
+        {{- cp.rule_id or cp.policy_label }} · view playbook position</a>
+      <span class="citation-hint">quote ▾</span>
+    </summary>
+    <div class="border rounded p-2 mt-1 mb-1 small bg-light citation-quote">
+      {% if cp.required and not cp.rule_id %}
+      <div><span class="fw-semibold text-danger">Required policy:</span>
+        “{{ cp.policy_label }}” must be addressed — no position defined for
+        service line <code>{{ cp.service_line }}</code>.</div>
+      {% else %}
+      {% if cp.preferred %}<div><span class="fw-semibold text-success">Preferred:</span> “{{ cp.preferred }}”</div>{% endif %}
+      {% if cp.fallback %}<div><span class="fw-semibold">Fallback:</span> “{{ cp.fallback }}”</div>{% endif %}
+      {% if cp.walk_away %}<div><span class="fw-semibold text-danger">Walk-away:</span> “{{ cp.walk_away }}”</div>{% endif %}
+      {% endif %}
+      <div class="text-muted mt-1">
+        {% if cp.as_of == 'current' %}
+        Current playbook v{{ cp.playbook_version }} (analyzed before citation snapshots — position may have changed since analysis).
+        {% else %}
+        Playbook v{{ cp.playbook_version }}, as of analysis.
+        {% endif %}
+      </div>
+    </div>
+  </details>
+</div>
+{% endif %}
+{% endmacro %}
