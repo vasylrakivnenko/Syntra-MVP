@@ -23,8 +23,9 @@ Syntra provides SMBs and mid-market companies with high quality legal support an
 ## Where things live
 
 - `artifacts/syntra/` — Flask app (app.py routes, database.py schema, pipeline/ stages, templates/)
-- `artifacts/syntra/market_lens/` — vendored NDA benchmarking lib (do not edit); `market_data/` holds its 200-NDA SQLite table
-- `artifacts/syntra/pipeline/market.py` — the only adapter between Syntra and market_lens (extraction via llm.py, offline scoring)
+- `artifacts/syntra/market_lens/` — vendored NDA benchmarking lib v2 (do not edit); `market_data/` holds the combined 1,158-NDA table (ContractNLI + CUAD + MCC; market.sqlite + omx_reference.json + DATA_ATTRIBUTION.md)
+- `artifacts/syntra/pipeline/market.py` — the only adapter between Syntra and market_lens (extraction via llm.py, offline scoring, LLM synthesis)
+- `artifacts/syntra/pipeline/market_tabpfn.py` — optional TabPFN rarity signal; entirely inert unless TABPFN_TOKEN is set
 
 ## Architecture decisions
 
@@ -45,9 +46,11 @@ Syntra provides SMBs and mid-market companies with high quality legal support an
 - Version upload flow: mode radio on /upload (`mode=version` + `parent_case_id`); eligibility = case's latest version status IN ('processed','error') — mid-pipeline cases are not offered. Identical-file check in version mode compares hash against the case's own latest only (the dedupe escape-hatch: re-uploading same bytes escalates urgency/deadline, never downgrades). New version supersedes the case's prior PENDING queue_items (status='superseded', invisible to all bell/queue queries which filter explicit statuses) and auto-acks prior decided-unacknowledged items. Audit `version_uploaded` after the write block.
 - Version changes summary (`_version_changes` in app.py) is a Counter multiset diff of finding labels between consecutive versions → new/resolved/still_open; it's an analysis comparison, not a text diff (UI says so). Superseded banner on non-latest contract pages takes precedence over ALL other banners. Attorney review page shows a prior_review card only when the previous version's review was actually decided (approved/rejected), not superseded-while-pending.
 
+- Market Lens v2 (two-signal evidence): per-field rule_share (transparent frequency) + optional TabPFN conditional probability are NEVER collapsed — disagreement renders as a "worth a second look" badge. The library no longer ships an off_market boolean; the ADAPTER defines flagging as pvalue ≤ 0.05 (calibrated, from persisted omx_reference.json). The full top-k combo list must be re-derived via `score_against_reference` — `build_evidence`'s per-field rule_combo keeps only the rarest combo per field and is lossy as a list. Reports keep all v1 keys and ADD `bundle`/`synthesis`/`tabpfn_used`; contract.html renders legacy v1 rows via the no-synthesis fallback branch. Market card is role-split: operator sees the synthesized plain-language report + routing outcome only; attorney sees raw stats (Off-Market Index percentile, observed/expected/p per combo, per-field signals). Routing policy unchanged: rarity never routes — only LLM-judged unfavorable+uncovered combos escalate.
+
 ## Product
 
-- Operator (owner role) uploads a contract with urgency (standard/high/urgent) + optional needed-by date; pipeline segments clauses, compares to the company playbook, drafts a redline .docx, and benchmarks NDAs against 200-contract market data.
+- Operator (owner role) uploads a contract with urgency (standard/high/urgent) + optional needed-by date; pipeline segments clauses, compares to the company playbook, drafts a redline .docx, and benchmarks NDAs against 1,158-contract market data (with a plain-language market position report for operators and full statistics for attorneys).
 - High-risk findings auto-escalate to an attorney queue triaged by urgency → deadline → risk; attorney approves/rejects with notes; operator gets an inbox notification and acknowledges the decision.
 - Urgency/deadline chips are visible on the dashboard, All Contracts, queue, contract detail, and attorney review pages.
 

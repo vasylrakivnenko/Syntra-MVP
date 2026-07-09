@@ -1,6 +1,7 @@
 """Load nda-schema.yaml and derive artifacts the pipeline needs:
 
-  - the JSON Schema for structured-output extraction (enforces null != absent)
+  - a pydantic model per extraction call, for Anthropic's `messages.parse`
+    structured-output path (enforces null != absent -- see build_extraction_model)
   - discrete-token helpers for co-occurrence stats (bool/enum/numeric bucketing)
   - field metadata lookups (type, region, favorability, source)
 
@@ -13,9 +14,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Optional
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field as PydanticField, create_model
 
 SCHEMA_PATH = Path(__file__).parent / "schema" / "nda-schema.yaml"
 PERPETUAL_SENTINEL = 9999  # numeric_months: perpetual / indefinite
@@ -67,46 +69,74 @@ def load_schema(path: Path | str = SCHEMA_PATH) -> Schema:
     return Schema(version=str(raw["schema_version"]), fields=fields)
 
 
-def _value_json_type(field: Field) -> dict[str, Any]:
-    """JSON Schema fragment for a single field's `value`. `null` is always
-    permitted so the model can distinguish 'could not determine' from a real
-    observation (null != absent)."""
-    if field.type == "bool":
-        return {"type": ["boolean", "null"]}
-    if field.type == "numeric_months":
-        return {"type": ["number", "null"]}
-    if field.type == "enum":
-        assert field.enum is not None
-        return {"type": ["string", "null"], "enum": [*field.enum, None]}
-    raise ValueError(f"unknown field type {field.type!r} for {field.id}")
+# Sentinel written on the wire for bool/enum fields whose value can't be
+# determined. Collapsing null-vs-absent into one flat 3-way Literal (instead
+# of a nullable boolean) turns "is it null OR false" from a two-step judgment
+# call into a single choice, and -- as a side effect -- a Literal[...] compiles
+# to a plain string enum (no anyOf/null union), which matters for Anthropic's
+# structured-outputs 16-union-typed-parameter cap (see build_extraction_model).
+UNDETERMINED = "undetermined"
 
 
-def build_json_schema(schema: Schema) -> dict[str, Any]:
-    """The output_config.format schema handed to the extraction call.
+def _field_submodel(field: Field) -> type[BaseModel]:
+    """Pydantic model for one field's {value, evidence_span} object.
 
-    Each field is an object {value, evidence_span}. `additionalProperties: false`
-    and a full `required` list are mandatory for structured outputs.
+    bool/enum fields use a flat Literal (true/false/undetermined, or the enum
+    values plus "undetermined") rather than a nullable type — see UNDETERMINED.
+    numeric_months stays a plain nullable float: there's no "absent" state for
+    a duration distinct from "couldn't determine it", so the ambiguity that
+    motivates the flat Literal for bool/enum doesn't apply here.
     """
-    props: dict[str, Any] = {}
-    for f in schema.fields:
-        props[f.id] = {
-            "type": "object",
-            "properties": {
-                "value": _value_json_type(f),
-                "evidence_span": {
-                    "type": ["string", "null"],
-                    "description": "Verbatim quote from the document supporting the value, or null.",
-                },
-            },
-            "required": ["value", "evidence_span"],
-            "additionalProperties": False,
-        }
-    return {
-        "type": "object",
-        "properties": props,
-        "required": schema.field_ids,
-        "additionalProperties": False,
-    }
+    if field.type == "bool":
+        value_type: Any = Literal["true", "false", UNDETERMINED]
+        value_desc = (
+            f"{field.description} Respond 'true' if the clause is present, 'false' if it is "
+            "explicitly ABSENT from the document, or 'undetermined' if the text does not let "
+            "you tell either way. Never guess between false and undetermined."
+        )
+    elif field.type == "enum":
+        assert field.enum is not None
+        value_type = Literal[tuple(field.enum) + (UNDETERMINED,)]
+        value_desc = (
+            f"{field.description} Choose exactly one of {list(field.enum)}, or 'undetermined' "
+            "if the document does not let you determine this."
+        )
+    elif field.type == "numeric_months":
+        value_type = Optional[float]
+        value_desc = (
+            f"{field.description} Normalize to months (2 years -> 24). Perpetual/indefinite -> "
+            f"{PERPETUAL_SENTINEL}. null if it cannot be determined from the text."
+        )
+    else:
+        raise ValueError(f"unknown field type {field.type!r} for {field.id}")
+
+    return create_model(
+        f"Field_{field.id}",
+        __config__=ConfigDict(extra="forbid"),
+        value=(value_type, PydanticField(description=value_desc)),
+        evidence_span=(
+            str,
+            PydanticField(description="Verbatim quote from the document supporting the value, "
+                                       "or empty string if value is false/undetermined/null."),
+        ),
+    )
+
+
+def build_extraction_model(schema: Schema, fields: list[Field] | None = None) -> type[BaseModel]:
+    """The pydantic model passed as `output_format` to `client.messages.parse`.
+
+    One nested submodel per field (see _field_submodel), each carrying the
+    field's own extraction guidance as its `value` description — previously
+    this guidance (the YAML `description` text) was never sent to the model at
+    all on this path, which is a materially bigger source of ambiguity than
+    the null-vs-false question the Literal collapsing addresses.
+
+    `fields`: restrict the model to a subset (for batched calls); defaults to
+    every field in `schema`.
+    """
+    target = fields if fields is not None else schema.fields
+    kwargs = {f.id: (_field_submodel(f), ...) for f in target}
+    return create_model("NDAExtraction", __config__=ConfigDict(extra="forbid"), **kwargs)
 
 
 def coerce_value(field: Field, value: Any) -> Any:

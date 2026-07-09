@@ -4,8 +4,9 @@
     python -m market_lens.score --record ./records/foo.json --table ./market_table
 
 Prints:
-  (a) per-field position vs. the segment (frequency for bool/enum, percentile
-      for numeric), and
+  (a) per-field position vs. the segment (share of segment sharing this exact
+      value for bool/enum, or this same bucket_numeric bucket for numeric --
+      never raw percentile; see stats.univariate's docstring for why), and
   (b) the Off-Market Index + the rarest clause COMBINATIONS driving it, each as
       an explainable "X of N docs in segment" string.
 
@@ -19,11 +20,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .schema_loader import PERPETUAL_SENTINEL, Schema, coerce_row, load_schema
+from .schema_loader import PERPETUAL_SENTINEL, Schema, bucket_numeric, coerce_row, load_schema
 from .stats import (
     OFF_MARKET_THRESHOLD,
     off_market_index,
-    percentile,
+    score_against_reference,
     segment,
     univariate,
 )
@@ -93,14 +94,40 @@ def render(target_row: dict[str, Any], meta: dict[str, Any],
             key = "true" if tv is True else "false" if tv is False else str(tv)
             share = stat["freq"].get(key, 0.0)
             pos = f"{share:5.0%} of segment share this value"
-        else:  # numeric
-            pct = percentile(stat.get("values", []), float(tv))
-            pos = f"{pct:5.0%}ile ({tv:g} mo)"
+        else:  # numeric -- bucket share, NOT raw percentile (see stats.univariate docstring:
+                # percentile would force every perpetual-duration doc to the 100th percentile
+                # regardless of how common perpetual actually is in the segment)
+            b = bucket_numeric(f, float(tv))
+            share = stat.get("bucket_freq", {}).get(b, 0.0)
+            pos = f"{share:5.0%} of segment share bucket [{b}] ({tv:g} mo)"
         lines.append(f"  {f.id:<32} {_fmt_value(tv):<22} {pos}")
 
     # --- (b) Off-Market Index ---
+    ref = _load_reference(table_dir)
+    if ref is not None:
+        om = score_against_reference(schema, target_row, ref)
+        lines.append("\nOff-Market Index (v1.1, vs persisted reference population)")
+        lines.append("  " + "-" * 68)
+        if om is None:
+            lines.append("  INSUFFICIENT DATA — target's segment below the N floor in the reference.")
+        else:
+            lines.append(f"  Index: {om.index}/100   (rank vs reference; raw surprise {om.raw})")
+            lines.append("  Most surprising clause combinations in this NDA:")
+            for contrib in om.contributions:
+                if len(contrib) == 4:  # pvalue statistic
+                    combo, obs, exp, pval = contrib
+                    lines.append(f"    expected ~{exp:.1f}, observed {obs} (p={pval:.2g})   "
+                                 + "  +  ".join(combo))
+                else:
+                    combo, obs, exp = contrib
+                    lines.append(f"    expected ~{exp:.1f}, observed {obs}   " + "  +  ".join(combo))
+            lines.append("\n  (statistical context, not legal advice)")
+        return "\n".join(lines)
+
+    # Legacy fallback: table has no persisted reference (v1 raw-rarity index —
+    # known to saturate; rebuild the table to get the v1.1 reference).
     res = off_market_index(schema, target_row, seg)
-    lines.append("\nOff-Market Index")
+    lines.append("\nOff-Market Index (LEGACY v1 — no reference found; rebuild table for v1.1)")
     lines.append("  " + "-" * 68)
     if res.status == "insufficient_data":
         lines.append(f"  INSUFFICIENT DATA — segment N={res.segment_n} below floor "
@@ -116,6 +143,15 @@ def render(target_row: dict[str, Any], meta: dict[str, Any],
         lines.append(f"\n  (off-market flag = combination in <= {OFF_MARKET_THRESHOLD:.0%} of segment; "
                      f"statistical context, not legal advice)")
     return "\n".join(lines)
+
+
+def _load_reference(table_dir: Path | None) -> dict | None:
+    if table_dir is None:
+        return None
+    ref_path = table_dir / "omx_reference.json"
+    if not ref_path.exists():
+        return None
+    return json.loads(ref_path.read_text())
 
 
 def _load_table_rows(table_dir: Path, schema: Schema) -> list[dict[str, Any]]:

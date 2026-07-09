@@ -209,6 +209,8 @@
 
 {# ── market lens (advisory statistical context) ── #}
 {% if market %}
+{% set is_attorney = user and user.role == 'attorney' %}
+{% set synth = market.get('synthesis') %}
 <div class="card mb-4">
   <div class="card-header bg-dark text-white fw-semibold d-flex justify-content-between align-items-center">
     <span><i class="bi bi-graph-up me-1"></i>Market Lens — how this NDA compares to the market</span>
@@ -218,6 +220,52 @@
   </div>
   <div class="card-body">
     {% set flagged = market.off_market.flagged %}
+
+    {# ── synthesized market position report (both roles) ── #}
+    {% if synth %}
+      {% if synth.headline %}<p class="fw-semibold mb-2">{{ synth.headline }}</p>{% endif %}
+      {% if synth.client_summary %}<p class="mb-3">{{ synth.client_summary }}</p>{% endif %}
+      {% if is_attorney and synth.lawyer_notes %}
+      <div class="border rounded px-3 py-2 mb-3 bg-light">
+        <small class="text-muted fw-semibold d-block mb-1"><i class="bi bi-briefcase me-1"></i>ATTORNEY NOTES</small>
+        <ul class="small mb-0">
+          {% for n in synth.lawyer_notes %}<li>{{ n }}</li>{% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+    {% endif %}
+
+    {% if synth and not is_attorney %}
+    {# ── operator view: plain-language outcome only, no raw statistics ── #}
+      {% set adverse = (market.assessments or []) | selectattr('favorability','equalto','unfavorable') | rejectattr('covered_by_playbook') | list %}
+      {% if adverse %}
+      <div class="alert alert-danger py-2 mb-3">
+        <strong><i class="bi bi-exclamation-triangle me-1"></i>
+          {{ adverse | length }} unusual term{{ 's' if adverse | length != 1 }} judged against our position</strong>
+        and missed by the playbook — <strong>routed to attorney review</strong>.
+        <ul class="mb-0 mt-1 small list-unstyled">
+          {% for a in adverse %}
+          <li class="mb-1">{{ a.label }}{% if a.rationale %} <span class="text-muted">— {{ a.rationale }}</span>{% endif %}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% elif flagged %}
+      <p class="text-muted mb-3"><i class="bi bi-info-circle me-1"></i>
+        Some term combinations here are uncommon in the market, but none were judged against our position — no attorney review needed on market grounds.
+      </p>
+      {% else %}
+      <p class="text-success mb-3"><i class="bi bi-check-circle me-1"></i>
+        This NDA's terms look on-market.
+      </p>
+      {% endif %}
+    {% else %}
+    {# ── attorney view (and legacy reports without a synthesis): full statistical detail ── #}
+    {% if market.off_market.index is not none and market.off_market.status == 'scored' %}
+    <p class="small text-muted mb-2">
+      <i class="bi bi-speedometer2 me-1"></i>
+      Off-Market Index <strong>{{ market.off_market.index }}</strong> — this NDA's clause combinations are rarer overall than ~{{ market.off_market.index | round | int }}% of comparable NDAs.
+    </p>
+    {% endif %}
     {% if market.off_market.status != 'scored' %}
     <p class="text-muted mb-3"><i class="bi bi-info-circle me-1"></i>
       Not enough comparable NDAs in this segment to score clause combinations reliably.
@@ -241,6 +289,7 @@
             </span>
             {% if a.covered_by_playbook %}<span class="badge bg-dark">already in playbook findings</span>{% endif %}
             {{ a.label }}
+            {% if a.get('pvalue') is not none %}<span class="text-muted">· observed {{ a.observed }} of {{ a.n }} · ~{{ a.expected }} expected if independent · p={{ '%.2g' | format(a.pvalue) }}</span>{% endif %}
             {% if a.rationale %}<div class="text-muted">{{ a.rationale }}</div>{% endif %}
             {% if a.fields and market.evidence %}
               {% for fid in a.fields if market.evidence.get(fid) %}
@@ -262,6 +311,7 @@
         <ul class="mb-0 mt-1 small">
           {% for c in flagged[:5] %}
           <li>{{ c.label }} — only <strong>{{ c.count }} of {{ c.n }}</strong> comparable NDAs ({{ c.share }}%)
+            {% if c.get('pvalue') is not none %}<span class="text-muted">· ~{{ c.expected }} expected if independent · p={{ '%.2g' | format(c.pvalue) }}</span>{% endif %}
             {% if c.fields and market.evidence %}
               {% for fid in c.fields if market.evidence.get(fid) %}
               <div class="text-muted fst-italic ps-2 border-start border-2">
@@ -284,11 +334,13 @@
     <div class="row row-cols-1 row-cols-md-2 g-2 mb-2">
       {% for f in market.fields if f.determined %}
       <div class="col">
-        <div class="d-flex justify-content-between small border rounded px-2 py-1">
+        <div class="d-flex justify-content-between small border rounded px-2 py-1 {{ 'border-warning' if f.get('signals_disagree') }}">
           <span class="text-muted">{{ f.label | title }}</span>
           <span class="text-end">
             <strong>{{ f.value }}</strong>
             {% if f.note %}<span class="text-muted"> · {{ f.note }}</span>{% endif %}
+            {% if f.get('tabpfn_p_obs') is not none %}<span class="text-muted"> · model p={{ '%.2f' | format(f.tabpfn_p_obs) }}</span>{% endif %}
+            {% if f.get('signals_disagree') %}<span class="badge bg-warning text-dark ms-1" title="The frequency count and the learned model disagree on how unusual this value is">signals disagree — worth a second look</span>{% endif %}
           </span>
         </div>
       </div>
@@ -300,8 +352,9 @@
       {{ undetermined | length }} field{{ 's' if undetermined | length != 1 }} couldn't be determined from the text.
     </small>
     {% endif %}
+    {% endif %}
     <small class="text-muted fst-italic">
-      Statistical context from {{ market.segment.table_n }} public SEC-filed NDAs (ContractNLI, CC BY 4.0) — not legal advice.
+      Statistical context from {{ market.segment.table_n }} public NDAs (ContractNLI, CUAD &amp; the Material Contracts Corpus — see data attribution) — not legal advice.
       Rarity alone never triggers review; a combination routes to an attorney only when judged unfavorable to our position and missed by the playbook.
     </small>
   </div>

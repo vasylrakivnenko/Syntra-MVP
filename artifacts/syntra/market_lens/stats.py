@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from itertools import combinations
 from typing import Any
 
-from .schema_loader import Schema, token
+from .schema_loader import Schema, bucket_numeric, token
 
 # Floors (transparent failure — see module docstring).
 MIN_SEGMENT_N = 30          # below this, don't score the combination layer at all
@@ -46,7 +46,20 @@ def segment(rows: list[dict[str, Any]], mutual_value: Any) -> list[dict[str, Any
 
 def univariate(schema: Schema, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Per-field summary within `rows`. Null values are excluded from the
-    denominator and reported as coverage."""
+    denominator and reported as coverage.
+
+    numeric_months carries BOTH `values` (raw sorted, for percentile() where
+    a continuous rank is actually wanted) AND `bucket_freq` (share of rows in
+    the SAME bucket_numeric bucket as a given value). Prefer bucket_freq for
+    "how rare is this value" questions: raw percentile forces every
+    PERPETUAL_SENTINEL (9999) row to exactly the 100th percentile regardless
+    of how common perpetual actually is in the segment -- it typically is
+    NOT rare (e.g. ~23-39% of NDAs in this corpus have perpetual
+    confidentiality_survival_months), so percentile alone would mislabel a
+    common term as maximally unusual. bucket_freq doesn't have that problem
+    because PERPETUAL_SENTINEL gets its own bucket, same as everywhere else
+    numeric fields are discretized for this project.
+    """
     out: dict[str, dict[str, Any]] = {}
     n = len(rows)
     for f in schema.fields:
@@ -62,6 +75,12 @@ def univariate(schema: Schema, rows: list[dict[str, Any]]) -> dict[str, dict[str
             entry["freq"] = {k: round(c / len(present), 3) for k, c in freq.items()} if present else {}
         else:  # numeric_months
             entry["values"] = sorted(float(v) for v in present)
+            bucket_freq: dict[str, float] = {}
+            for v in present:
+                b = bucket_numeric(f, float(v))
+                bucket_freq[b] = bucket_freq.get(b, 0) + 1
+            entry["bucket_freq"] = ({k: round(c / len(present), 3) for k, c in bucket_freq.items()}
+                                     if present else {})
         out[f.id] = entry
     return out
 
@@ -122,6 +141,24 @@ MIN_MARGINAL_V11 = 0.15
 EXP_MIN = 2.0
 
 
+def _binom_tail_le(n: int, k: int, q: float) -> float:
+    """Exact P(X <= k) for X ~ Binomial(n, q). Small n (segment sizes), so the
+    direct sum is fine. Used by the calibrated 'pvalue' statistic: how unlikely
+    is it to see this few co-occurrences if the clauses were independent?"""
+    if q <= 0.0:
+        return 1.0
+    if q >= 1.0:
+        return 1.0 if k >= n else 0.0
+    from math import exp, lgamma, log
+
+    lq, l1q = log(q), log(1.0 - q)
+    total = 0.0
+    for i in range(0, min(k, n) + 1):
+        lc = lgamma(n + 1) - lgamma(i + 1) - lgamma(n - i + 1)
+        total += exp(lc + i * lq + (n - i) * l1q)
+    return min(total, 1.0)
+
+
 @dataclass
 class OMScore:
     doc: Any
@@ -132,24 +169,36 @@ class OMScore:
 
 def _doc_surprise(schema: Schema, target: dict[str, Any],
                   seg_token_sets: list[set[str]], marg: dict[str, float],
-                  *, min_marginal: float, exp_min: float, top_k: int):
+                  *, min_marginal: float, exp_min: float, top_k: int,
+                  statistic: str = "deficit"):
+    """statistic="deficit": surprise = expected - observed (v1.1 original).
+    statistic="pvalue":  surprise = -log10 P(X <= observed | Binomial(n, q)),
+    q = product of marginals — calibrated, comparable across combos/segments.
+    Contribution tuples: deficit -> (combo, obs, exp); pvalue -> (combo, obs, exp, pval)."""
     n = len(seg_token_sets)
     cand = [t for t in _row_tokens(schema, target) if marg.get(t, 0.0) >= min_marginal]
     scored: list[tuple] = []
     for size in (2, 3):
         for combo in combinations(sorted(cand), size):
-            expected = n
+            q = 1.0
             for t in combo:
-                expected *= marg[t]
+                q *= marg[t]
+            expected = n * q
             if expected < exp_min:  # must be common enough that its absence is meaningful
                 continue
             observed = sum(1 for s in seg_token_sets if set(combo) <= s)
-            surprise = expected - observed
-            if surprise > 0:
-                scored.append((surprise, combo, observed, expected))
+            if statistic == "pvalue":
+                pval = _binom_tail_le(n, observed, q)
+                surprise = -__import__("math").log10(max(pval, 1e-300))
+                if pval < 0.5:  # only below-expectation combos are "off-market"
+                    scored.append((surprise, combo, observed, expected, pval))
+            else:
+                surprise = expected - observed
+                if surprise > 0:
+                    scored.append((surprise, combo, observed, expected))
     scored.sort(key=lambda x: -x[0])
     raw = scored[0][0] if scored else 0.0
-    contribs = [(c, o, e) for _, c, o, e in scored[:top_k]]
+    contribs = [tuple(s[1:]) for s in scored[:top_k]]
     return raw, contribs
 
 
@@ -161,6 +210,7 @@ def off_market_rank(
     min_marginal: float = MIN_MARGINAL_V11,
     exp_min: float = EXP_MIN,
     top_k: int = TOP_K_CONTRIBUTIONS,
+    statistic: str = "deficit",  # default frozen (baseline stability); "pvalue" = calibrated
 ) -> list[OMScore] | None:
     """Score every doc in one (already-segmented) population and rank-normalize.
     Each doc is scored against the OTHER docs in the segment (self excluded).
@@ -180,7 +230,8 @@ def off_market_rank(
                 marg[t] = marg.get(t, 0) + 1
         marg = {t: c / m for t, c in marg.items()}
         raw, contribs = _doc_surprise(schema, target, others, marg,
-                                      min_marginal=min_marginal, exp_min=exp_min, top_k=top_k)
+                                      min_marginal=min_marginal, exp_min=exp_min,
+                                      top_k=top_k, statistic=statistic)
         raws.append((raw, target, contribs))
 
     sorted_raw = sorted(r for r, _, _ in raws)
@@ -191,6 +242,83 @@ def off_market_rank(
         out.append(OMScore(doc=target, index=idx, raw=round(raw, 2), contributions=contribs))
     out.sort(key=lambda x: -x.index)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Reference persistence — score NEW docs with v1.1 against a stored population
+# --------------------------------------------------------------------------- #
+# build_reference() snapshots, per segment, the token sets + the leave-one-out
+# raw-surprise distribution. score_against_reference() then gives a single new
+# NDA a valid rank-normalized index without re-scoring the whole corpus.
+# (Slight asymmetry: reference raws are leave-one-out at N-1; a new doc scores
+# against the full N. Negligible at these sizes; documented, not hidden.)
+
+REFERENCE_FILENAME = "omx_reference.json"
+
+
+def build_reference(
+    schema: Schema,
+    rows: list[dict[str, Any]],
+    *,
+    statistic: str = "pvalue",
+    min_marginal: float = MIN_MARGINAL_V11,
+    exp_min: float = EXP_MIN,
+) -> dict[str, Any]:
+    segments: dict[str, Any] = {}
+    for key, mutual_val in (("true", True), ("false", False), ("all", None)):
+        seg = segment(rows, mutual_val)
+        scores = off_market_rank(schema, seg, statistic=statistic,
+                                 min_marginal=min_marginal, exp_min=exp_min)
+        if scores is None:
+            continue
+        segments[key] = {
+            "n": len(seg),
+            "token_sets": [sorted(_row_tokens(schema, r)) for r in seg],
+            "raw_sorted": sorted(s.raw for s in scores),
+        }
+    return {
+        "schema_version": schema.version,
+        "statistic": statistic,
+        "params": {"min_marginal": min_marginal, "exp_min": exp_min,
+                   "min_segment_n": MIN_SEGMENT_N},
+        "segments": segments,
+    }
+
+
+def score_against_reference(
+    schema: Schema,
+    target: dict[str, Any],
+    reference: dict[str, Any],
+    *,
+    top_k: int = TOP_K_CONTRIBUTIONS,
+) -> OMScore | None:
+    """v1.1 score for ONE new doc against a persisted population. Returns None
+    if the target's segment isn't in the reference (below the N floor)."""
+    if reference.get("schema_version") != schema.version:
+        raise ValueError(
+            f"reference built for schema {reference.get('schema_version')}, "
+            f"current is {schema.version} — rebuild the reference")
+    mutual = target.get("mutual")
+    key = "true" if mutual is True else "false" if mutual is False else "all"
+    seg = reference["segments"].get(key) or reference["segments"].get("all")
+    if seg is None:
+        return None
+    token_sets = [set(ts) for ts in seg["token_sets"]]
+    n = len(token_sets)
+    marg: dict[str, float] = {}
+    for s in token_sets:
+        for t in s:
+            marg[t] = marg.get(t, 0) + 1
+    marg = {t: c / n for t, c in marg.items()}
+    p = reference["params"]
+    raw, contribs = _doc_surprise(
+        schema, target, token_sets, marg,
+        min_marginal=p["min_marginal"], exp_min=p["exp_min"],
+        top_k=top_k, statistic=reference["statistic"])
+    import bisect
+    raw_sorted = seg["raw_sorted"]
+    index = round(100.0 * bisect.bisect_right(raw_sorted, raw) / len(raw_sorted), 1)
+    return OMScore(doc=target, index=index, raw=round(raw, 3), contributions=contribs)
 
 
 def off_market_index(
