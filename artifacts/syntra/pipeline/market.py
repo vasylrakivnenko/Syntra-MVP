@@ -283,19 +283,50 @@ def score_market_row(row: dict[str, Any], meta: dict[str, Any] | None = None,
 _SYNTH_SYSTEM = """You are a senior commercial lawyer writing a short "Market Position Report"
 about one NDA, for two audiences at once.
 
-You receive, per extracted field: the value, a verbatim evidence quote from the
-document (when available), and up to two independent rarity signals versus a
-population of comparable real NDAs:
-- rule_share: the share of comparable NDAs with this same value (transparent
-  frequency count; LOW = rare).
-- tabpfn_p: a learned model's probability of this value given the document's
-  other terms (LOW = surprising). May be null if the signal wasn't run.
-Where both are present and marked "signals_disagree", explicitly call that
-clause out as worth a second look BECAUSE the two signals disagree — do not
-silently pick one signal as the truth.
+WHAT THE REFERENCE POPULATION IS
+The comparison set is ~1,150 real NDAs assembled from public corpora (SEC-filing
+NDAs, public contract datasets). It skews toward disclosed, often larger-company
+deals — it is a market sample, not a census of all private NDAs. Comparisons run
+only within the same segment (mutual vs one-way NDAs); the segment size N is
+given. Treat percentages from a small N as rough.
 
-You also receive the whole-document Off-Market Index (0-100; higher = rarer
-overall vs comparable NDAs) and the statistically flagged clause combinations.
+THE TWO RARITY SIGNALS — they measure DIFFERENT things
+Per extracted field you may receive up to two independent signals:
+- rule_share: the plain share of comparable NDAs whose value for this field is
+  the same (numeric fields are compared by range bucket, not exact value).
+  LOW = uncommon in the market. It says nothing about this document's internal
+  coherence.
+- tabpfn_p: a tabular model's probability of THIS value GIVEN the document's
+  other 17 terms. LOW = surprising for this kind of NDA, i.e. it doesn't fit
+  the profile the rest of the document suggests. May be null if not run.
+  BASE-RATE WARNING: fields with many possible values (chance_p is provided per
+  field) rarely score near 1.0 even when perfectly ordinary — judge tabpfn_p
+  against chance_p, not against 1.0. tabpfn_p well ABOVE chance_p is
+  unremarkable even if it looks "low" in absolute terms.
+
+HOW TO READ THE COMBINATIONS OF THE TWO
+- both low → genuinely unusual: rare in the market AND out of profile.
+- rule_share high, tabpfn_p low → the value is common in general but odd next
+  to this document's other terms; often the most interesting case.
+- rule_share low, tabpfn_p high → uncommon in the market but coherent with this
+  document's profile (e.g. a consistently aggressive or consistently modern NDA).
+- Where marked "signals_disagree", explicitly call the clause out as worth a
+  second look BECAUSE the two signals disagree — never silently pick one signal
+  as the truth.
+
+WHAT RARITY MEANS — AND DOESN'T
+Rarity is descriptive, not normative: an uncommon term can be favorable to a
+party, simply modern, or just underrepresented in a public-filings corpus. Never
+equate "rare" with "bad" or "risky" on its own — say what the term does and let
+the reader judge, grounded in the quote where one is provided.
+
+WHOLE-DOCUMENT CONTEXT
+You also receive the Off-Market Index (a calibrated 0-100 percentile-style rank:
+higher = the document's overall combination of terms is rarer vs the reference
+population) and the statistically flagged clause combinations (term combinations
+seen together in the market far LESS often than expected if the clauses were
+independent; the p-value is against that independence assumption — it is a
+statistical anomaly detector, not a legal judgment).
 
 Respond with JSON only:
 {
@@ -312,12 +343,33 @@ Everything you write is statistical context versus a market sample, not legal
 advice — never present rarity as "bad" on its own."""
 
 
+def _chance_p(schema: Schema, field_id: str) -> float | None:
+    """The probability a know-nothing uniform guess would assign to any one
+    outcome of this field — the base rate the synthesis prompt tells the model
+    to judge tabpfn_p against (bool: 2 outcomes; enum: one per option;
+    numeric_months: one per range bucket, len(bins)+1, PLUS the distinct
+    "perpetual" bucket bucket_numeric emits for values >= PERPETUAL_SENTINEL —
+    a real, common class in this corpus, not a rounding artifact)."""
+    try:
+        f = schema.by_id(field_id)
+    except KeyError:
+        return None
+    if f.type == "bool":
+        k = 2
+    elif f.type == "enum":
+        k = len(f.enum or []) or 2
+    else:
+        k = len(f.bins or []) + 2
+    return 1 / k
+
+
 def synthesize_market_report(ext: Extraction, report: dict[str, Any],
                              source_name: str = "<doc>") -> dict[str, Any]:
     """One LLM call: extraction + evidence bundle -> the human-facing Market
     Position Report. Raises on failure; run_market_lens treats it as optional
     enrichment."""
     bundle = report["bundle"]
+    schema = load_schema()
     lines = []
     for f in report["fields"]:
         if not f["determined"]:
@@ -327,6 +379,9 @@ def synthesize_market_report(ext: Extraction, report: dict[str, Any],
             bits.append(f"rule_share={f['share']:.2f}")
         if f["tabpfn_p_obs"] is not None:
             bits.append(f"tabpfn_p={f['tabpfn_p_obs']:.2f}")
+            chance = _chance_p(schema, f["id"])
+            if chance is not None:
+                bits.append(f"chance_p={chance:.2f}")
         if f["signals_disagree"]:
             bits.append("signals_disagree=true")
         quote = (ext.evidence or {}).get(f["id"])
@@ -371,6 +426,14 @@ analysis already raised, and (3) statistically unusual (off-market) clause
 combinations found in the NDA — each with how often it was observed among
 comparable NDAs versus how often it would be expected if the clauses were
 independent (a low p-value means the combination is rarer than chance).
+
+Context on the statistics: the comparison set is ~1,150 real NDAs from public
+corpora (SEC filings and public contract datasets), compared within the same
+mutual/one-way segment. That sample skews toward disclosed, often larger-company
+deals, and "expected" counts assume clause independence — so a combination can
+be statistically rare because of corpus skew or correlated drafting styles, not
+because anything is wrong with it. The numbers tell you what is UNUSUAL; only
+the legal substance of the terms tells you whether it is unfavorable.
 
 For EACH numbered combination, judge:
 - favorability: "favorable" if the unusual terms work in our interest,
