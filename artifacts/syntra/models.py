@@ -123,10 +123,43 @@ class ClauseVerdict(BaseModel):
     reason: Optional[str] = None # for abstain / silence
     service_line: Optional[str] = None
     suggested_text: str = ""
+    # Why an abstain happened — splits three states the branch alone conflates:
+    #   outside_playbook  — clause type has no playbook coverage (FYI, not risk)
+    #   low_confidence    — classification/segment/grounding below threshold
+    #   llm_error         — model unavailable or call failed
+    abstain_kind: Optional[str] = None
     # Snapshot of the playbook position (or required policy, for silence) this
     # verdict was judged against, captured at analysis time so citations stay
     # accurate even after the playbook is edited. See Triage for the shape.
     cited_position: Optional[dict] = None
+
+
+class RuleVerdict(BaseModel):
+    """One verdict per playbook rule, reconciled across ALL clauses of the
+    document. This is the rendered decision unit; per-clause ClauseVerdicts
+    remain underneath as the evidence layer.
+
+    verdict values map onto the four terminal states:
+      met               — fine, no action
+      met_via_fallback  — acceptable compromise
+      breach            — needs change (+ suggested_text redline)
+      attorney_question — attorney decides; `question` carries the formed ask
+      outside_playbook  — clause type outside the playbook (FYI + add-position)
+      not_covered       — required policy has no position for this service
+                          line (today's 'silence': gap is in OUR playbook)
+    """
+    id: str = Field(default_factory=lambda: str(uuid.uuid4())[:12])
+    doc_id: str
+    rule_id: Optional[str] = None       # None for outside_playbook / question rows
+    policy_id: Optional[str] = None
+    clause_type: Optional[str] = None
+    verdict: str
+    rationale: str = ""
+    question: Optional[str] = None
+    suggested_text: str = ""
+    evidence_clause_ids: list[str] = []
+    cited_position: Optional[dict] = None
+    risk_weight: int = 3
 
 
 class QueueItem(BaseModel):

@@ -27,8 +27,74 @@
 </div>
 
 <div class="row g-3">
-  {# ── clause verdicts ── #}
   <div class="col-lg-8">
+
+  {# ── reconciled rule-level findings (docs analyzed with reconciliation) ── #}
+  {% if rule_verdicts %}
+
+  {% if attorney_questions %}
+  <div class="card mb-3 border-0" style="border-left: 4px solid #6f42c1 !important;">
+    <div class="card-header fw-semibold text-white" style="background:#6f42c1;">
+      <i class="bi bi-question-circle me-1"></i>
+      Questions for you ({{ attorney_questions | length }})
+    </div>
+    <div class="card-body py-2 px-3">
+      {% for r in attorney_questions %}
+      <div class="{{ 'border-bottom pb-2 mb-2' if not loop.last }}">
+        <div class="fw-semibold small">
+          {{ (r.cited_position.policy_label if r.cited_position else None)
+             or (r.clause_type or 'General').replace('_',' ') | title }}
+        </div>
+        <p class="mb-1 small">{{ r.question }}</p>
+        {% if r.rationale %}
+        <small class="text-muted fst-italic"><i class="bi bi-quote"></i> {{ r.rationale }}</small>
+        {% endif %}
+        {{ cite.sources(r, link_prefix='/contracts/' ~ item.doc_id) }}
+      </div>
+      {% endfor %}
+      <small class="text-muted d-block mt-2">Answer in your decision notes below — approve or reject resolves these.</small>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="card mb-3">
+    <div class="card-header fw-semibold bg-light">
+      <i class="bi bi-journal-check me-1"></i>Playbook positions — reconciled across the document
+    </div>
+    <div class="card-body py-2 px-3">
+      {% for r in rule_verdicts if r.verdict != 'attorney_question' %}
+      <div class="d-flex justify-content-between align-items-start gap-2 {{ 'border-bottom pb-2 mb-2' if not loop.last }}">
+        <div class="flex-grow-1">
+          <span class="fw-semibold small">
+            {{ (r.cited_position.policy_label if r.cited_position else None)
+               or (r.clause_type or 'General').replace('_',' ') | title }}
+          </span>
+          <span class="badge ms-1 bg-{{ 'danger' if r.verdict == 'breach'
+                                        else 'warning text-dark' if r.verdict == 'met_via_fallback'
+                                        else 'success' if r.verdict == 'met'
+                                        else 'secondary' }}">
+            {{ {'breach': 'BREACH', 'met': 'MET', 'met_via_fallback': 'MET VIA FALLBACK',
+                'not_covered': 'NOT COVERED', 'outside_playbook': 'OUTSIDE PLAYBOOK'}[r.verdict] }}
+          </span>
+          {% if r.rationale %}
+          <small class="text-muted fst-italic d-block mt-1"><i class="bi bi-quote"></i> {{ r.rationale }}</small>
+          {% endif %}
+          {% if r.suggested_text %}
+          <div class="mt-1 p-1 bg-light rounded border-start border-primary border-3">
+            <small class="text-primary"><i class="bi bi-pencil-square me-1"></i>{{ r.suggested_text }}</small>
+          </div>
+          {% endif %}
+          {{ cite.sources(r, link_prefix='/contracts/' ~ item.doc_id) }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <h6 class="text-muted fw-semibold mt-3 mb-2">CLAUSE DETAIL</h6>
+  {% endif %}
+
+  {# ── clause verdicts ── #}
   {% for v in verdicts %}
   {% if v.branch != 'abstain' %}
   <div class="card mb-2 verdict-{{ v.status or v.branch }}">

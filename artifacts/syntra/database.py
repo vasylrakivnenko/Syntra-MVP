@@ -73,6 +73,20 @@ def init_db():
             risk_weight  INTEGER DEFAULT 3,
             suggested_text TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS rule_verdicts (
+            id           TEXT PRIMARY KEY,
+            doc_id       TEXT,
+            rule_id      TEXT,
+            policy_id    TEXT,
+            clause_type  TEXT,
+            verdict      TEXT,
+            rationale    TEXT,
+            question     TEXT,
+            suggested_text TEXT DEFAULT '',
+            evidence_clause_ids TEXT,
+            cited_position TEXT,
+            risk_weight  INTEGER DEFAULT 3
+        );
         CREATE TABLE IF NOT EXISTS market_reports (
             doc_id         TEXT PRIMARY KEY,
             schema_version TEXT,
@@ -108,6 +122,7 @@ def init_db():
             created_at   TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_verdicts_doc_id ON verdicts(doc_id);
+        CREATE INDEX IF NOT EXISTS idx_rule_verdicts_doc_id ON rule_verdicts(doc_id);
         CREATE INDEX IF NOT EXISTS idx_queue_items_doc_id ON queue_items(doc_id);
         CREATE INDEX IF NOT EXISTS idx_queue_items_status ON queue_items(status);
         """)
@@ -124,6 +139,7 @@ def init_db():
             "ALTER TABLE queue_items ADD COLUMN reviewed_by TEXT",
             "ALTER TABLE queue_items ADD COLUMN acknowledged_at TEXT",
             "ALTER TABLE verdicts ADD COLUMN cited_position TEXT",
+            "ALTER TABLE verdicts ADD COLUMN abstain_kind TEXT",
         ):
             try:
                 conn.execute(stmt)

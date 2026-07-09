@@ -27,6 +27,7 @@ from pipeline.segmenter import Segmenter
 from pipeline.chunker import Chunker
 from pipeline.classifier import Classifier
 from pipeline.triage import Triage
+from pipeline.reconciler import Reconciler
 from pipeline.redliner import Redliner
 from pipeline.router import Router
 from knowledge.lane_two import LaneTwoAgent
@@ -164,6 +165,32 @@ _CATEGORIES = {
 }
 _GROUP_ORDER = ["needs_change", "compromise", "couldnt_assess", "standard", "not_covered"]
 
+# ── rule-level view (reconciled docs) — "Couldn't assess" never renders here ──
+_RULE_CATEGORIES = {
+    "needs_change": ("Needs change", "cat-badge-danger", "accent-danger",
+                     "positions that need changes"),
+    "attorney":     ("With your attorney", "cat-badge-attorney", "accent-attorney",
+                     "questions with your attorney"),
+    "compromise":   ("Acceptable compromise", "cat-badge-warning", "accent-warning",
+                     "acceptable compromises"),
+    "standard":     ("Met", "cat-badge-success", "",
+                     "positions met"),
+    "not_covered":  ("Not covered", "cat-badge-muted", "",
+                     "positions your playbook doesn't cover"),
+    "fyi":          ("Outside your playbook", "cat-badge-muted", "",
+                     "clauses outside your playbook"),
+}
+_RULE_GROUP_ORDER = ["needs_change", "attorney", "compromise", "standard",
+                     "not_covered", "fyi"]
+_RULE_VERDICT_TO_CAT = {
+    "breach": "needs_change",
+    "attorney_question": "attorney",
+    "met_via_fallback": "compromise",
+    "met": "standard",
+    "not_covered": "not_covered",
+    "outside_playbook": "fyi",
+}
+
 
 def _display_category(v):
     if v.get("branch") == "silence":
@@ -285,11 +312,8 @@ def _market_rows(market):
     return rows[:5]
 
 
-def _contract_view(verdicts, market, escalated=False):
-    """Everything the redesigned /contracts/<id> template needs, derived
-    at render time from existing verdict rows and the stored market report.
-    `escalated` = a pending attorney queue item exists; keeps the headline
-    tone in lockstep with the routing pill and the dashboard risk chip."""
+def _clause_cards(verdicts):
+    """Per-clause display cards + preamble split, shared by both view modes."""
     cards, preamble = [], []
     first_start = min((v.get("clause_start") or 0 for v in verdicts), default=0)
     for v in verdicts:
@@ -303,6 +327,19 @@ def _contract_view(verdicts, market, escalated=False):
         cards.append({**v, "cat": cat, "cat_label": label, "badge": badge,
                       "accent": accent, "title": _clause_title(v),
                       "takeaway": _takeaway(v, cat), "open": False})
+    return cards, preamble
+
+
+def _contract_view(verdicts, market, escalated=False, rules=None):
+    """Everything the redesigned /contracts/<id> template needs, derived
+    at render time from existing verdict rows and the stored market report.
+    `escalated` = a pending attorney queue item exists; keeps the headline
+    tone in lockstep with the routing pill and the dashboard risk chip.
+    Docs with reconciled rule verdicts render the rule-level view; legacy
+    docs (and no-key mode) keep the per-clause view."""
+    if rules:
+        return _contract_view_rules(rules, verdicts, market, escalated)
+    cards, preamble = _clause_cards(verdicts)
 
     counts = Counter(c["cat"] for c in cards)
 
@@ -369,9 +406,171 @@ def _contract_view(verdicts, market, escalated=False):
     return {
         "headline": headline, "tone": tone, "blocker": blocker, "fix": fix,
         "summary_line": summary_line, "counts": counts, "groups": groups,
-        "preamble": preamble, "total": len(cards),
+        "preamble": preamble, "total": len(cards), "rule_mode": False,
         "market_rows": _market_rows(market) if market else [],
     }
+
+
+def _rule_title(r):
+    """Plain-language rule row title — playbook policy name, never a rule ID."""
+    cp = r.get("cited_position") or {}
+    if cp.get("policy_label"):
+        return cp["policy_label"]
+    ctype = r.get("clause_type")
+    if ctype:
+        return _CLAUSE_TITLES.get(ctype) or ctype.replace("_", " ").title()
+    return "Additional review"
+
+
+def _rule_takeaway(r, cat):
+    base = _plain_sentence(r.get("rationale"))
+    if cat == "standard":
+        return (base + " No action needed.").strip() if base else \
+            "This document meets your playbook position. No action needed."
+    if cat == "attorney":
+        return base or "Sent to your attorney with a specific question."
+    if cat == "fyi":
+        return base or "This clause type is outside your playbook — shown for awareness."
+    if cat == "not_covered":
+        return base or "Your playbook doesn't cover this yet — no position to compare against."
+    return base or "Review this position."
+
+
+def _contract_view_rules(rules, verdicts, market, escalated=False):
+    """Rule-level decision surface: one row per playbook position, reconciled
+    across the whole document; per-clause cards nest underneath as evidence.
+    'Couldn't assess' intentionally does not exist here — every hedge was
+    resolved into a verdict, an attorney question, or an outside-playbook FYI."""
+    clause_cards, preamble = _clause_cards(verdicts)
+    by_id = {c["clause_id"]: c for c in clause_cards}
+
+    rows, seen_clauses = [], set()
+    for r in rules:
+        cat = _RULE_VERDICT_TO_CAT.get(r.get("verdict"))
+        if cat is None:
+            continue
+        label, badge, accent, _plural = _RULE_CATEGORIES[cat]
+        evidence, evidence_refs = [], []
+        for cid in r.get("evidence_clause_ids") or []:
+            card = by_id.get(cid)
+            if not card:
+                continue
+            if cid in seen_clauses:
+                evidence_refs.append({"clause_id": cid, "title": card["title"]})
+            else:
+                seen_clauses.add(cid)
+                evidence.append(card)
+        cp = r.get("cited_position") or {}
+        rows.append({
+            "rule_row_id": r.get("id"), "cat": cat, "cat_label": label,
+            "badge": badge, "accent": accent, "title": _rule_title(r),
+            "takeaway": _rule_takeaway(r, cat),
+            "verdict": r.get("verdict"), "rationale": r.get("rationale"),
+            "question": r.get("question"),
+            "suggested_text": r.get("suggested_text"),
+            "cited_position": cp or None,
+            "rule_id": r.get("rule_id"),
+            "rule_href": (f"/playbook#pos-{cp['service_line']}-{cp['policy_id']}"
+                          if cp.get("service_line") and cp.get("policy_id") else None),
+            "risk_weight": r.get("risk_weight") or 0,
+            "evidence": evidence, "evidence_refs": evidence_refs,
+            "open": False,
+        })
+
+    # Clauses no rule cited (rare — reconciler evidence is best-effort) still
+    # need an anchor target so citations never dangle: park them last as FYI.
+    orphans = [c for c in clause_cards if c["clause_id"] not in seen_clauses]
+
+    counts = Counter(r["cat"] for r in rows)
+
+    groups = []
+    for key in _RULE_GROUP_ORDER:
+        members = [r for r in rows if r["cat"] == key]
+        if key == "needs_change":
+            members.sort(key=lambda r: -(r.get("risk_weight") or 0))
+        else:
+            members.sort(key=lambda r: r["title"].lower())
+        label, _badge, _accent, plural = _RULE_CATEGORIES[key]
+        groups.append({"key": key, "label": label, "plural": plural,
+                       "count": len(members), "cards": members})
+
+    blocker = fix = None
+    if counts["needs_change"]:
+        top = next(g for g in groups if g["key"] == "needs_change")["cards"][0]
+        top["open"] = True
+        blocker = {
+            "sentence": _plain_sentence(top.get("rationale"), 25) or top["takeaway"],
+            "rule_id": top.get("rule_id"),
+            "rule_href": top.get("rule_href"),
+            "clause_id": (top["evidence"][0]["clause_id"] if top["evidence"]
+                          else (top["evidence_refs"][0]["clause_id"]
+                                if top["evidence_refs"] else None)),
+        }
+        fix_row = top if top.get("suggested_text") else next(
+            (r for g in groups if g["key"] == "needs_change"
+             for r in g["cards"] if r.get("suggested_text")), None)
+        if fix_row:
+            fix = {"text": fix_row["suggested_text"], "clause_id": None}
+
+    n_q = counts["attorney"]
+    if counts["needs_change"]:
+        headline, tone = "Changes required before signing", "danger"
+    elif n_q:
+        headline = (f"Waiting on your attorney — {n_q} question{'s' if n_q != 1 else ''} sent")
+        tone = "warning"
+    elif counts["compromise"]:
+        headline, tone = "OK to sign with minor compromises", "warning"
+    elif counts["not_covered"]:
+        headline, tone = "No blockers found — your playbook doesn't cover everything here", "muted"
+    elif counts["standard"] or counts["fyi"]:
+        headline, tone = "Ready to sign", "success"
+    else:
+        headline, tone = "No analysis available yet", "muted"
+    if escalated and tone in ("success", "muted"):
+        # never show a green/neutral verdict next to an attorney-escalation pill
+        tone = "warning"
+
+    parts = []
+    if counts["compromise"]:
+        n = counts["compromise"]
+        parts.append(f"{n} position{'s are' if n != 1 else ' is an'} acceptable compromise{'s' if n != 1 else ''}")
+    if n_q:
+        parts.append(f"{n_q} question{'s are' if n_q != 1 else ' is'} with your attorney")
+    if counts["not_covered"]:
+        n = counts["not_covered"]
+        parts.append(f"{n} position{'s aren' if n != 1 else ' isn'}'t covered by your playbook yet")
+    if counts["fyi"]:
+        n = counts["fyi"]
+        parts.append(f"{n} clause{'s are' if n != 1 else ' is'} outside your playbook (FYI)")
+    if counts["standard"]:
+        parts.append("everything else meets your playbook")
+    summary_line = " · ".join(parts)
+
+    return {
+        "headline": headline, "tone": tone, "blocker": blocker, "fix": fix,
+        "summary_line": summary_line, "counts": counts, "groups": groups,
+        "preamble": preamble, "total": len(rows), "rule_mode": True,
+        "orphans": orphans,
+        "market_rows": _market_rows(market) if market else [],
+    }
+
+
+def _process_rule_verdicts(rows):
+    """Parse JSON fields in DB rule_verdict rows."""
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["evidence_clause_ids"] = json.loads(d.get("evidence_clause_ids") or "[]")
+        except Exception:
+            d["evidence_clause_ids"] = []
+        try:
+            raw = d.get("cited_position")
+            d["cited_position"] = json.loads(raw) if raw else None
+        except Exception:
+            d["cited_position"] = None
+        out.append(d)
+    return out
 
 
 # ── pipeline runner ───────────────────────────────────────────────────────────
@@ -413,12 +612,25 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
             json.dumps(verdict.rule_ids), verdict.rationale, verdict.reason,
             verdict.service_line, rw, verdict.suggested_text or "",
             json.dumps(verdict.cited_position) if verdict.cited_position else None,
+            verdict.abstain_kind,
         ))
 
-    redline_bytes = Redliner().redline(doc, v_objects, clauses)
+    # Rule-level reconciliation: one verdict per playbook rule, evidence cited
+    # across clauses. Failure here must never lose the per-clause layer — the
+    # UI falls back to per-clause rendering when no rule rows exist.
+    clause_type_map = {row[0]: row[1] for row in clf_rows}
+    try:
+        rule_verdicts = Reconciler().reconcile(
+            doc_id, v_objects, clauses, clause_type_map, segment, playbook)
+    except Exception:
+        rule_verdicts = []
+        print(f"[reconciler] failed for {doc_id}:\n{traceback.format_exc()}")
+
+    redline_bytes = Redliner().redline(doc, v_objects, clauses,
+                                       rule_verdicts=rule_verdicts)
     (UPLOADS / f"{doc_id}_redline.docx").write_bytes(redline_bytes)
 
-    queue_items = Router().route(doc_id, v_objects)
+    queue_items = Router().route(doc_id, v_objects, rule_verdicts)
 
     with get_db() as db:
         db.executemany("INSERT OR REPLACE INTO clauses VALUES (?,?,?,?,?,?)", clause_rows)
@@ -426,9 +638,25 @@ def _run_pipeline(doc_id: str, path: Path, source_type: str, filename: str, user
         db.executemany(
             """INSERT OR REPLACE INTO verdicts
                (clause_id, doc_id, branch, status, rule_ids, rationale, reason,
-                service_line, risk_weight, suggested_text, cited_position)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                service_line, risk_weight, suggested_text, cited_position,
+                abstain_kind)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             verdict_rows,
+        )
+        # Reprocessing replaces the doc's rule layer wholesale.
+        db.execute("DELETE FROM rule_verdicts WHERE doc_id=?", (doc_id,))
+        db.executemany(
+            """INSERT INTO rule_verdicts
+               (id, doc_id, rule_id, policy_id, clause_type, verdict, rationale,
+                question, suggested_text, evidence_clause_ids, cited_position,
+                risk_weight)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [(r.id, r.doc_id, r.rule_id, r.policy_id, r.clause_type, r.verdict,
+              r.rationale, r.question, r.suggested_text,
+              json.dumps(r.evidence_clause_ids),
+              json.dumps(r.cited_position) if r.cited_position else None,
+              r.risk_weight)
+             for r in rule_verdicts],
         )
         # Reprocessing must not leave stale pending queue items behind.
         db.execute("DELETE FROM queue_items WHERE doc_id=? AND status='pending'", (doc_id,))
@@ -729,16 +957,28 @@ def healthz():
     return {"status": "ok"}, 200
 
 
+# Risk subqueries are mode-aware: docs with reconciled rule verdicts count at
+# the rule level (breach ≙ unacceptable; breach/fallback/question/gap ≙ flag —
+# outside_playbook is an FYI, never a flag), legacy docs keep the per-clause
+# counts. Must stay in lockstep with _contract_view/_contract_view_rules.
 _DOCS_QUERY = """
     SELECT d.*,
            (SELECT q.status FROM queue_items q
              WHERE q.doc_id = d.doc_id ORDER BY q.rowid DESC LIMIT 1) AS review_status,
-           (SELECT COUNT(*) FROM verdicts v
-             WHERE v.doc_id = d.doc_id AND v.status = 'unacceptable') AS risk_unacceptable,
-           (SELECT COUNT(*) FROM verdicts v
-             WHERE v.doc_id = d.doc_id
-               AND ((v.branch = 'verdict' AND v.status != 'complies') OR v.branch = 'silence')
-           ) AS risk_flags
+           (CASE WHEN EXISTS (SELECT 1 FROM rule_verdicts r0 WHERE r0.doc_id = d.doc_id)
+             THEN (SELECT COUNT(*) FROM rule_verdicts r
+                    WHERE r.doc_id = d.doc_id AND r.verdict = 'breach')
+             ELSE (SELECT COUNT(*) FROM verdicts v
+                    WHERE v.doc_id = d.doc_id AND v.status = 'unacceptable')
+            END) AS risk_unacceptable,
+           (CASE WHEN EXISTS (SELECT 1 FROM rule_verdicts r0 WHERE r0.doc_id = d.doc_id)
+             THEN (SELECT COUNT(*) FROM rule_verdicts r
+                    WHERE r.doc_id = d.doc_id
+                      AND r.verdict IN ('breach','met_via_fallback','attorney_question','not_covered'))
+             ELSE (SELECT COUNT(*) FROM verdicts v
+                    WHERE v.doc_id = d.doc_id
+                      AND ((v.branch = 'verdict' AND v.status != 'complies') OR v.branch = 'silence'))
+            END) AS risk_flags
     FROM documents d
     WHERE d.version = (SELECT MAX(d2.version) FROM documents d2
                         WHERE d2.case_id = d.case_id)
@@ -1099,7 +1339,44 @@ def contracts():
 
 def _issue_counter(db, doc_id):
     """Multiset of a doc's open findings, keyed by human-readable label — the
-    unit of comparison for the version-history changes summary."""
+    unit of comparison for the version-history changes summary. Docs with
+    reconciled rule verdicts compare at the rule level; legacy docs keep the
+    per-clause labels (a cross-mode diff is inherently a re-baselining)."""
+    # Mode detection must match _DOCS_QUERY: ANY rule rows = reconciled doc.
+    # A reconciled doc with zero flagged positions returns an empty Counter —
+    # falling back to the clause counter would resurrect issues reconciliation
+    # already resolved and contradict the contract page.
+    rule_mode = db.execute(
+        "SELECT 1 FROM rule_verdicts WHERE doc_id=? LIMIT 1", (doc_id,)
+    ).fetchone() is not None
+    if rule_mode:
+        rule_rows = db.execute(
+            """SELECT verdict, rationale, clause_type, cited_position, question
+               FROM rule_verdicts
+               WHERE doc_id=?
+                 AND verdict IN ('breach','met_via_fallback','attorney_question','not_covered')""",
+            (doc_id,),
+        ).fetchall()
+        counts = Counter()
+        verdict_words = {
+            "breach": "needs change",
+            "met_via_fallback": "acceptable compromise",
+            "attorney_question": "attorney question",
+        }
+        for r in rule_rows:
+            try:
+                cp = json.loads(r["cited_position"]) if r["cited_position"] else {}
+            except Exception:
+                cp = {}
+            name = cp.get("policy_label") or \
+                (r["clause_type"] or "position").replace("_", " ").title()
+            if r["verdict"] == "not_covered":
+                label = f"Missing position: {name}"
+            else:
+                label = f"{name} — {verdict_words[r['verdict']]}"
+            counts[label] += 1
+        return counts
+
     rows = db.execute(
         """SELECT v.branch, v.status, v.reason, cl.clause_type
            FROM verdicts v
@@ -1181,6 +1458,10 @@ def contract(doc_id):
             pass  # never block the contract page on audit enrichment
     verdicts = _process_verdicts(rows)
     with get_db() as db:
+        rule_rows = db.execute(
+            "SELECT * FROM rule_verdicts WHERE doc_id=? ORDER BY risk_weight DESC",
+            (doc_id,),
+        ).fetchall()
         queue_item = db.execute(
             "SELECT * FROM queue_items WHERE doc_id=? ORDER BY rowid DESC LIMIT 1", (doc_id,)
         ).fetchone()
@@ -1214,7 +1495,8 @@ def contract(doc_id):
     latest = versions[-1] if versions else None
     is_latest = (latest is None) or (latest["doc_id"] == doc["doc_id"])
     view = _contract_view(verdicts, market,
-                          escalated=bool(queue_item and queue_item["status"] == "pending"))
+                          escalated=bool(queue_item and queue_item["status"] == "pending"),
+                          rules=_process_rule_verdicts(rule_rows))
     return render_template("contract.html", doc=doc, verdicts=verdicts, queue_item=queue_item,
                            market=market, our_party=our_party, view=view,
                            redline_available=redline_available, user=current_user(),
@@ -1400,7 +1682,16 @@ def review(item_id):
                 (item["case_id"], item["version"]),
             ).fetchone()
     verdicts = _process_verdicts(rows)
+    with get_db() as db:
+        rule_rows = db.execute(
+            "SELECT * FROM rule_verdicts WHERE doc_id=? ORDER BY risk_weight DESC",
+            (item["doc_id"],),
+        ).fetchall()
+    rule_verdicts = _process_rule_verdicts(rule_rows)
+    attorney_questions = [r for r in rule_verdicts if r.get("verdict") == "attorney_question"]
     return render_template("review.html", item=item, verdicts=verdicts,
+                           rule_verdicts=rule_verdicts,
+                           attorney_questions=attorney_questions,
                            prior_review=prior_review, user=current_user())
 
 

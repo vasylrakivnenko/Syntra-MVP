@@ -16,6 +16,7 @@
   .cat-badge-warning { background: #ffe8cc; color: #8a4b00; }
   .cat-badge-success { background: #d1e7dd; color: #0f5132; }
   .cat-badge-muted   { background: #e9ecef; color: #495057; }
+  .cat-badge-attorney { background: #e7defc; color: #4b2fa3; }
 
   .decision-card { padding: 24px; }
   .decision-headline { font-size: 1.55rem; font-weight: 700; letter-spacing: -.3px; margin: 0; }
@@ -30,6 +31,15 @@
                  box-shadow: 0 1px 4px rgba(0,0,0,.06); }
   .clause-card.accent-danger  { border-left: 4px solid #dc3545; }
   .clause-card.accent-warning { border-left: 4px solid #fd7e14; }
+  .clause-card.accent-attorney { border-left: 4px solid #6f42c1; }
+  .question-inset { border-left: 4px solid #6f42c1; background: #f7f4ff;
+                    padding: .8rem 1rem; border-radius: .35rem; }
+  .evidence-head { font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
+                   font-weight: 700; color: #6c757d; margin: 1rem 0 .5rem; }
+  .evidence-card { background: #fbfbfc; border: 1px solid #eceef0; box-shadow: none; }
+  .evidence-card > summary { padding: 14px 18px; }
+  .evidence-card .clause-body { padding: 0 18px 14px; }
+  .evidence-refs { font-size: 13px; color: #6c757d; }
   .clause-card > summary { list-style: none; cursor: pointer; padding: 20px 24px; }
   .clause-card > summary::-webkit-details-marker { display: none; }
   .clause-card .clause-title { font-weight: 600; }
@@ -342,10 +352,45 @@
 </div>
 {% endif %}
 
-{# ── clause-by-clause — filterable, grouped by severity ── #}
+{# ── shared clause card — full card in legacy mode, evidence card nested
+     inside rule rows in rule mode (extra class + badge suppressed) ── #}
+{% macro clause_card(c, nested=False) %}
+<details class="clause-card {{ 'evidence-card' if nested else c.accent }}"
+         data-cat="{{ c.cat }}" id="clause-{{ c.clause_id }}" {{ 'open' if c.open and not nested }}>
+  <summary>
+    <div class="d-flex justify-content-between align-items-center gap-2">
+      <span class="clause-title">{{ c.title }}</span>
+      {% if not nested %}<span class="cat-badge {{ c.badge }}">{{ c.cat_label }}</span>{% endif %}
+    </div>
+    <div class="takeaway">{{ c.takeaway }}</div>
+  </summary>
+  <div class="clause-body">
+    {% if c.clause_text %}
+    <div class="excerpt">{{ c.clause_text[:600] }}{% if c.clause_text | length > 600 %}…{% endif %}</div>
+    {% endif %}
+    {% if c.rationale %}<p class="analysis">{{ c.rationale }}</p>{% endif %}
+    {% if c.reason and not nested %}<p class="analysis text-muted">{{ c.reason }}</p>{% endif %}
+    {% if c.suggested_text %}
+    <div class="fix-inset">
+      <span class="inset-label">Suggested replacement</span>
+      <span class="small">{{ c.suggested_text }}</span>
+    </div>
+    {% endif %}
+    {{ cite.source_line(c) }}
+  </div>
+</details>
+{% endmacro %}
+
+{# ── findings — filterable, grouped by severity. Rule mode shows one row per
+     playbook position with the document clauses nested as evidence; legacy
+     docs (analyzed before reconciliation) keep the per-clause list. ── #}
 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
+  {% if view.rule_mode %}
+  <h6 class="text-muted fw-semibold mb-0">YOUR PLAYBOOK, POSITION BY POSITION ({{ view.total }})</h6>
+  {% else %}
   <h6 class="text-muted fw-semibold mb-0">CLAUSE-BY-CLAUSE ({{ view.total }} clauses)</h6>
-  <div class="filter-seg" role="group" aria-label="Filter clauses">
+  {% endif %}
+  <div class="filter-seg" role="group" aria-label="Filter findings">
     <button type="button" data-filter="all" class="active">All · {{ view.total }}</button>
     {% for g in view.groups if g.count %}
     <button type="button" data-filter="{{ g.key }}">{{ g.label }} · {{ g.count }}</button>
@@ -362,34 +407,65 @@
   </button>
   {% endif %}
   <div class="group-body {{ 'd-none' if not loop.first }}" id="group-{{ g.key }}">
-    {% for c in g.cards %}
-    <details class="clause-card {{ c.accent }}" data-cat="{{ c.cat }}" id="clause-{{ c.clause_id }}" {{ 'open' if c.open }}>
+    {% if view.rule_mode %}
+    {% for r in g.cards %}
+    <details class="clause-card {{ r.accent }}" data-cat="{{ r.cat }}" id="rule-{{ r.rule_row_id }}" {{ 'open' if r.open }}>
       <summary>
         <div class="d-flex justify-content-between align-items-center gap-2">
-          <span class="clause-title">{{ c.title }}</span>
-          <span class="cat-badge {{ c.badge }}">{{ c.cat_label }}</span>
+          <span class="clause-title">{{ r.title }}</span>
+          <span class="cat-badge {{ r.badge }}">{{ r.cat_label }}</span>
         </div>
-        <div class="takeaway">{{ c.takeaway }}</div>
+        <div class="takeaway">{{ r.takeaway }}</div>
       </summary>
       <div class="clause-body">
-        {% if c.clause_text %}
-        <div class="excerpt">{{ c.clause_text[:600] }}{% if c.clause_text | length > 600 %}…{% endif %}</div>
-        {% endif %}
-        {% if c.rationale %}<p class="analysis">{{ c.rationale }}</p>{% endif %}
-        {% if c.reason %}<p class="analysis text-muted">{{ c.reason }}</p>{% endif %}
-        {% if c.suggested_text %}
-        <div class="fix-inset">
-          <span class="inset-label">Suggested replacement</span>
-          <span class="small">{{ c.suggested_text }}</span>
+        {% if r.rationale %}<p class="analysis">{{ r.rationale }}</p>{% endif %}
+        {% if r.question %}
+        <div class="question-inset mb-2">
+          <span class="inset-label">Question sent to your attorney</span>
+          <span class="small">{{ r.question }}</span>
         </div>
         {% endif %}
-        {{ cite.source_line(c) }}
+        {% if r.suggested_text %}
+        <div class="fix-inset mb-2">
+          <span class="inset-label">Suggested replacement</span>
+          <span class="small">{{ r.suggested_text }}</span>
+        </div>
+        {% endif %}
+        {% if r.cat in ('not_covered', 'fyi') %}
+        <a href="/playbook" class="btn btn-sm btn-outline-dark mb-1">Add a position to your playbook →</a>
+        {% endif %}
+        {{ cite.source_line(r) }}
+        {% if r.evidence %}
+        <div class="evidence-head">Where this comes from in the document</div>
+        {% for c in r.evidence %}{{ clause_card(c, nested=True) }}{% endfor %}
+        {% endif %}
+        {% if r.evidence_refs %}
+        <div class="evidence-refs mt-1">
+          Also based on:
+          {% for ref in r.evidence_refs %}
+          <a href="#clause-{{ ref.clause_id }}" class="text-muted">{{ ref.title }}</a>{{ ', ' if not loop.last }}
+          {% endfor %}
+        </div>
+        {% endif %}
       </div>
     </details>
     {% endfor %}
+    {% else %}
+    {% for c in g.cards %}{{ clause_card(c) }}{% endfor %}
+    {% endif %}
   </div>
 </div>
 {% endfor %}
+
+{# ── rule mode: clauses no position cited — kept for reference & anchors ── #}
+{% if view.rule_mode and view.orphans %}
+<details class="preamble-row">
+  <summary>Other document clauses ({{ view.orphans | length }}) — no playbook position cites these</summary>
+  <div class="mt-2">
+    {% for c in view.orphans %}{{ clause_card(c, nested=True) }}{% endfor %}
+  </div>
+</details>
+{% endif %}
 
 {# ── document preamble — filing header text, never an analyzed clause ── #}
 {% if view.preamble %}
@@ -505,11 +581,13 @@ if (new URLSearchParams(location.search).has("ack")) {
   });
 
   // ── citation anchors: reveal + expand the target card wherever it hides ──
+  // Rule mode nests evidence clause cards inside rule <details> (and orphans
+  // inside a preamble-row <details>), so every ancestor must open too.
   function reveal() {
     const id = location.hash.slice(1);
     if (!id) return;
     const el = document.getElementById(id);
-    if (!el || !el.classList.contains("clause-card")) return;
+    if (!el || el.tagName !== "DETAILS") return;
     applyFilter("all");
     const g = el.closest(".clause-group");
     if (g) {
@@ -518,7 +596,9 @@ if (new URLSearchParams(location.search).has("ack")) {
       body.classList.remove("d-none");
       if (toggle) { toggle.dataset.expanded = "1"; toggle.classList.add("d-none"); }
     }
-    el.open = true;
+    for (let p = el; p; p = p.parentElement) {
+      if (p.tagName === "DETAILS") p.open = true;
+    }
     el.scrollIntoView({ block: "start" });
   }
   window.addEventListener("hashchange", reveal);

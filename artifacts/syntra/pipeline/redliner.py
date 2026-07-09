@@ -1,7 +1,7 @@
 """Redliner — produce a .docx with colour-coded redline summary section (§9)."""
 from __future__ import annotations
 import io
-from models import Document, ClauseVerdict
+from models import Document, ClauseVerdict, RuleVerdict
 
 
 _STATUS_COLOR = {
@@ -11,10 +11,18 @@ _STATUS_COLOR = {
     "complies":            (0x19, 0x87, 0x54),    # green
 }
 
+_RULE_VERDICT_LABEL = {
+    "breach":            ("POSITION BREACHED", (0xDC, 0x35, 0x45)),
+    "not_covered":       ("PLAYBOOK GAP", (0xDC, 0x35, 0x45)),
+    "attorney_question": ("ATTORNEY QUESTION", (0x6F, 0x42, 0xC1)),
+    "met_via_fallback":  ("MET VIA FALLBACK", (0xFF, 0x8C, 0x00)),
+}
+
 
 class Redliner:
     def redline(self, doc: Document, verdicts: list[ClauseVerdict],
-                clauses: list | None = None) -> bytes:
+                clauses: list | None = None,
+                rule_verdicts: list[RuleVerdict] | None = None) -> bytes:
         from docx import Document as DocxDoc
         from docx.shared import RGBColor, Pt
 
@@ -34,6 +42,35 @@ class Redliner:
         # ── redline summary section ──────────────────────────────────────────
         rdoc.add_page_break()
         rdoc.add_heading("REDLINE SUMMARY — ISSUES FLAGGED BY SYNTRA", level=1)
+
+        # Rule-level findings first: one row per playbook position, reconciled
+        # across the whole document. Per-clause flags below remain the evidence.
+        rule_rows = [r for r in (rule_verdicts or [])
+                     if r.verdict in _RULE_VERDICT_LABEL]
+        if rule_rows:
+            rdoc.add_heading("Findings by playbook position", level=2)
+            for r in rule_rows:
+                label, rgb = _RULE_VERDICT_LABEL[r.verdict]
+                p = rdoc.add_paragraph()
+                run = p.add_run(f"[{label}] ")
+                run.bold = True
+                run.font.color.rgb = RGBColor(*rgb)
+                name = ((r.cited_position or {}).get("policy_label")
+                        or (r.clause_type or "position").replace("_", " ").title())
+                p.add_run(name).bold = True
+                if r.rationale:
+                    rp = rdoc.add_paragraph()
+                    rp.add_run(r.rationale).italic = True
+                if r.question:
+                    qp = rdoc.add_paragraph()
+                    qr = qp.add_run(f"QUESTION FOR ATTORNEY: {r.question}")
+                    qr.font.color.rgb = RGBColor(0x6F, 0x42, 0xC1)
+                if r.suggested_text:
+                    sp = rdoc.add_paragraph()
+                    sr = sp.add_run(f"SUGGESTION: {r.suggested_text}")
+                    sr.font.color.rgb = RGBColor(0x00, 0x56, 0xB3)
+                rdoc.add_paragraph()
+            rdoc.add_heading("Per-clause evidence", level=2)
 
         action_verdicts = [
             v for v in verdicts

@@ -21,6 +21,7 @@ class Triage:
                 clause_id=clause.id, branch="abstain",
                 reason=f"Low classification confidence ({classification.confidence:.2f})",
                 service_line=segment.service_line,
+                abstain_kind="low_confidence",
             )
 
         # 2. Low-confidence segment → abstain
@@ -29,6 +30,7 @@ class Triage:
                 clause_id=clause.id, branch="abstain",
                 reason="Could not reliably identify service line",
                 service_line=segment.service_line,
+                abstain_kind="low_confidence",
             )
 
         # 3. "other" type is never actionable
@@ -37,6 +39,7 @@ class Triage:
                 clause_id=clause.id, branch="abstain",
                 reason="Clause classified as 'other'; no playbook coverage",
                 service_line=segment.service_line,
+                abstain_kind="outside_playbook",
             )
 
         # 4. Two-axis deterministic lookup
@@ -68,6 +71,7 @@ class Triage:
                 clause_id=clause.id, branch="abstain",
                 reason=f"No playbook position for ({segment.service_line}, {classification.clause_type})",
                 service_line=segment.service_line,
+                abstain_kind="outside_playbook",
             )
 
         # Snapshot the exact position this clause is judged against, so the
@@ -103,6 +107,7 @@ class Triage:
                 clause_id=clause.id, branch="abstain",
                 reason="LLM unavailable — set AI_INTEGRATIONS_OPENAI_API_KEY",
                 service_line=segment.service_line,
+                abstain_kind="llm_error",
             )
 
         prompt = (
@@ -135,6 +140,9 @@ class Triage:
                     clause_id=clause.id, branch="abstain",
                     reason="Insufficient grounding for compliance judgment",
                     service_line=segment.service_line,
+                    abstain_kind="low_confidence",
+                    rule_ids=[position.id],
+                    cited_position=cited_position,
                 )
 
             valid_statuses = {"complies", "acceptable_deviation", "unacceptable", "unusual"}
@@ -156,4 +164,7 @@ class Triage:
                 clause_id=clause.id, branch="abstain",
                 reason=f"LLM error: {str(exc)[:120]}",
                 service_line=segment.service_line,
+                abstain_kind="llm_error",
+                rule_ids=[position.id],
+                cited_position=cited_position,
             )
