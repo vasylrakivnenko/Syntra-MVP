@@ -1,0 +1,23 @@
+You're both right, and the tension resolves once you see that "couldn't assess" is conflating a pipeline architecture bug with a legitimate product state. Let me split it.
+
+**Case 1 isn't uncertainty — it's an aggregation failure.** Look at what's actually happening in this NDA: clause 3 says "I can't see the term length or exclusions from here." But clause 2 *contains* the 3-year term, and clause 5 *contains* the exclusions. The information Syntra claims it can't confirm is sitting two cards away, already extracted, already verdicted. The model isn't uncertain — your pipeline is asking the wrong question at the wrong granularity. CONF-NDA-1's requirements (mutuality, 2–3 year term, standard exclusions, bounded residuals) are properties of the *document*, not of any single clause. Asking each chunk "does this satisfy CONF-NDA-1?" guarantees six hedges, because no chunk ever could.
+
+The fix is a **rule-level reconciliation pass**, and it changes your verdict unit:
+
+1. Keep chunk → classify as-is, but have each clause emit *facts*, not verdicts: `term_length: 3y (clause 2)`, `mutuality: yes (clause 1)`, `exclusions: [public domain, independently developed, ...] (clause 5)`, `residuals: independent-development style (clause 4)`.
+2. Aggregate per playbook rule: one verdict per rule, evidence cited across clauses. CONF-NDA-1 becomes a requirements checklist — mutuality ✓, term ✓ (fallback), exclusions ✓, residuals ✓ (fallback, narrowly scoped) → **one amber "Met via fallback" verdict**.
+3. Clause cards become the evidence/drill-down layer under each rule, not the verdict layer.
+
+Run that on this exact document and your summary goes from eleven verdicts including six hedges to **three rows**: CONF-NDA-1 met via fallback, TT-GEN-SUP-1 breached (with your redline), publicity clause outside playbook. That's what a lawyer's read actually produces — and it kills most of the "wtf do I do" problem without forcing a single false opinion. This is also the honest answer: the hedges weren't honest uncertainty, they were the system refusing to look sideways.
+
+**Case 2 splits into two real states, neither of which should render as a shrug:**
+
+*No matching playbook rule* (your clause 7 publicity clause): that's not "couldn't assess," it's "outside your playbook." Render it as an FYI with Market Lens context — "publicity clauses appear in ~X% of mutual NDAs, typically low-risk" — plus an "Add a position for this" action. Bonus: log these misses per clause type; when the same gap recurs across contracts, prompt the playbook owner. That turns abstention into a playbook-improvement loop.
+
+*Genuine low confidence after reconciliation* (ambiguous drafting, grounding below threshold): this will be rare once aggregation exists, and here abstaining is *correct* — you don't want Syntra confidently wrong on legal judgment; that's the liability wall. But abstention must terminate in an action, not a gray badge. Auto-route it to the attorney queue **with a formed question**: "Clause 6's carve-out uses nonstandard wording — does it satisfy the standard-exclusions requirement in CONF-NDA-1?" An escalation with a specific question is a decision. A displayed "couldn't assess" is a decision refused.
+
+The governing principle: **every rendered verdict must end in exactly one of four terminal states** — (1) fine, no action; (2) needs change, here's the redline; (3) attorney decides, here's the question; (4) outside playbook, here's market context + add-rule. "Couldn't assess" is allowed to exist internally as a pipeline state, never as a UI state.
+
+One more piece this unlocks: your existing "silent" bucket becomes meaningful. After reconciliation, if a requirement is addressed *nowhere* in the document (say, no residuals language at all), the playbook YAML should carry a per-rule `on_silence: acceptable | breach | insert_clause` field so silence resolves deterministically instead of piling into the abstain bucket.
+
+Sequencing-wise I'd do reconciliation before the UI redesign spec I gave you, or at least in the same sprint — otherwise you're polishing the presentation of verdicts whose granularity is about to change. The Decision Card and severity grouping survive intact; the clause list just becomes rule-grouped with clause evidence nested under it.
